@@ -175,4 +175,52 @@ Con Spotify bloqueando la captura a nivel de plataforma (no hay forma legítima 
 sortearlo sin root/ingeniería inversa, ambas explícitamente prohibidas en el
 spec), **YouTube pasa a ser el objetivo viable real**, y Spotify queda descartado
 salvo que una versión futura de la app cambie su política de captura (fuera de
-nuestro control). Pendiente de decisión del usuario sobre cómo continuar.
+nuestro control).
+
+## Límite de plataforma adicional: no se puede sustituir el audio original (solo superponerlo)
+
+Investigado el 2026-09-11, sin tocar código del motor de audio, a petición del
+usuario, antes de construir la Fase 2 (Passthrough).
+
+**Pregunta:** ¿puede la app silenciar la reproducción original de la app fuente
+mientras reproduce la copia con pitch-shifting, para lograr una sustitución limpia
+(el pipeline del punto 1 del spec: original → shift → auriculares, sin oír las dos
+a la vez)?
+
+**Respuesta: NO, con las APIs públicas disponibles para una app de terceros sin
+privilegios de sistema.**
+
+`AudioMix` (la clase interna sobre la que se construye `AudioPlaybackCaptureConfiguration`)
+define dos modos de enrutado:
+
+- `ROUTE_FLAG_RENDER` — el audio se redirige y **deja de sonar** por su destino
+  original. Esto es lo que se necesitaría para una sustitución limpia.
+- `ROUTE_FLAG_LOOP_BACK_RENDER` — el audio **sigue sonando normalmente** en su
+  destino original, y además se entrega una copia a quien la pide. Esto es lo
+  único a lo que da acceso `AudioPlaybackCaptureConfiguration`.
+
+Redirigir de verdad (`ROUTE_FLAG_RENDER`) solo es posible usando la API de sistema
+`android.media.audiopolicy.AudioPolicy` con el permiso `MODIFY_AUDIO_ROUTING`, que
+es un permiso de firma/sistema — no obtenible por una app de terceros instalada
+normalmente (requiere ser app de sistema o tener el dispositivo rooteado). Lo
+confirma la propia discusión de los mantenedores de scrcpy evaluando este mismo
+problema para forwarding de audio:
+[Genymobile/scrcpy#4380](https://github.com/Genymobile/scrcpy/issues/4380) — cita
+literal: *"If `AudioMix.ROUTE_FLAG_RENDER` is used instead of
+`AudioMix.ROUTE_FLAG_LOOP_BACK_RENDER`, the audio no longer plays on the device
+itself"*, señalando que ese modo requiere la API de sistema, no la pública.
+
+**Consecuencia práctica:** con las restricciones del proyecto (sin root, sin APIs
+privadas, sin modificar la app fuente), el original **siempre sonará superpuesto**
+a la copia transportada. No se pudo confirmar (sin implementar y medir en
+dispositivo) si bajar el volumen general de música del sistema atenúa también lo
+que se captura, o si el punto de captura está antes de esa atenuación — quedaría
+pendiente de verificación empírica si el proyecto se retoma.
+
+## Estado del proyecto: PAUSADO (2026-09-11)
+
+A petición del usuario, tras confirmar esta limitación. La Fase 1 (POC de
+captura) quedó completa y funcionando para YouTube. No se ha empezado la Fase 2
+(Passthrough) ni ninguna posterior. Para retomarlo, el primer paso sería la
+verificación empírica de volumen mencionada arriba, ya que determina si el
+resultado final es mínimamente usable o no.

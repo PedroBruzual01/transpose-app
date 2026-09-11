@@ -1,17 +1,22 @@
 # Real-Time Transpose — Audio Capture POC
 
-Proyecto personal. Objetivo actual: responder si es viable capturar en tiempo real
-el audio que Android reproduce desde otra app (Spotify / YouTube) para,
-eventualmente, aplicarle pitch-shifting sin cambiar el tempo — sin tocar la API de
-Spotify, sin root y sin modificar la app fuente.
+Proyecto personal. Objetivo: capturar en tiempo real el audio que reproduce otra
+app de Android y aplicarle pitch-shifting sin cambiar el tempo — sin tocar ninguna
+API de la app fuente, sin root y sin modificarla.
 
-Ver [FEASIBILITY.md](FEASIBILITY.md) para la investigación de las APIs de Android
-implicadas y el resultado del POC.
+**Cambio de alcance (2026-09-11):** la app se pensó originalmente optimizada para
+Spotify, pero el POC de captura confirmó que Spotify bloquea
+`AudioPlaybackCaptureConfiguration` a nivel de plataforma (`ALLOW_CAPTURE_BY_NONE`)
+— no es sorteable sin root/ingeniería inversa, ambos fuera de alcance. **YouTube es
+ahora el objetivo principal** (funciona sin bloqueo, confirmado en dispositivo
+real). Ver [FEASIBILITY.md](FEASIBILITY.md) para la investigación completa y la
+evidencia del POC.
 
-## Estado actual: Fase 1 — POC de captura
+## Estado actual: Fase 1 completada — pasando a Fase 2 (Passthrough)
 
-Solo captura, sin pitch-shifting todavía. No construir el resto de la app hasta que
-`FEASIBILITY.md` confirme que la captura es fiable con Spotify y/o YouTube.
+Fase 1 (solo captura, sin procesar) confirmada y funcionando. Siguiente paso:
+reproducir el audio capturado sin modificarlo, para validar el enrutado completo
+antes de meter el motor de pitch-shifting.
 
 ## Cómo probarlo
 
