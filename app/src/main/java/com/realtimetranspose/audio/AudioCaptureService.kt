@@ -1,5 +1,6 @@
 package com.realtimetranspose.audio
 
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,8 +9,18 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.IBinder
 import com.realtimetranspose.MainActivity
+
+private fun Intent.getParcelableExtraCompat(key: String): Intent? =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getParcelableExtra(key, Intent::class.java)
+    } else {
+        @Suppress("DEPRECATION")
+        getParcelableExtra(key)
+    }
 
 /**
  * Owns the foreground-service lifecycle required by Android's MediaProjection
@@ -17,23 +28,22 @@ import com.realtimetranspose.MainActivity
  * — this class exists purely to satisfy "there must be an active foreground
  * service of type mediaProjection while capture is running".
  *
- * [MediaProjection] is not Parcelable, so it can't travel through an Intent.
- * The activity hands it off via [pendingMediaProjection] immediately before
- * calling startForegroundService(); onCreate() runs (and calls
- * startForeground()) before onStartCommand() picks it up, which keeps the
- * ordering Android requires.
+ * Android checks that requirement at [MediaProjectionManager.getMediaProjection]
+ * call time, not just when the capture is actually built — so the (resultCode,
+ * data) pair from the system consent dialog travels here via plain Intent
+ * extras, and we fetch the token ourselves in [onStartCommand], which always
+ * runs after [onCreate] has already called [startForeground].
  */
 class AudioCaptureService : Service() {
 
     companion object {
         const val ACTION_START = "com.realtimetranspose.action.START"
         const val ACTION_STOP = "com.realtimetranspose.action.STOP"
+        const val EXTRA_RESULT_CODE = "com.realtimetranspose.extra.RESULT_CODE"
+        const val EXTRA_RESULT_DATA = "com.realtimetranspose.extra.RESULT_DATA"
 
         private const val CHANNEL_ID = "audio_capture_service"
         private const val NOTIFICATION_ID = 1001
-
-        @Volatile
-        var pendingMediaProjection: MediaProjection? = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -51,8 +61,14 @@ class AudioCaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                val projection = pendingMediaProjection
-                pendingMediaProjection = null
+                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
+                val resultData = intent.getParcelableExtraCompat(EXTRA_RESULT_DATA)
+                val projection = if (resultData != null) {
+                    getSystemService(MediaProjectionManager::class.java)
+                        .getMediaProjection(resultCode, resultData)
+                } else {
+                    null
+                }
                 if (projection != null) {
                     projection.registerCallback(
                         object : MediaProjection.Callback() {
@@ -68,6 +84,7 @@ class AudioCaptureService : Service() {
                     updateNotification("Processing")
                 } else {
                     AudioCaptureManager.reportPermissionDenied()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
             }

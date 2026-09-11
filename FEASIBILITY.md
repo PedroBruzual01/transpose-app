@@ -9,8 +9,8 @@ oficial de Android (developer.android.com) consultada en septiembre de 2026.
 |---|---|
 | ¿Puede una app de terceros capturar el audio de reproducción de otra app en Android moderno, sin root? | **SUPPORTED** (API pública `AudioPlaybackCaptureConfiguration`, Android 10+) |
 | ¿Puede la app fuente (Spotify, YouTube, etc.) bloquear esa captura? | **SÍ**, mediante `setAllowedCapturePolicy` / `android:allowAudioPlaybackCapture="false"` — decisión de cada app, no nuestra |
-| ¿Spotify bloquea la captura? | **UNKNOWN — pendiente del POC** (hay reportes públicos de que sí, pero no confirmado en la versión/dispositivo actuales) |
-| ¿YouTube (app de vídeo) bloquea la captura? | **UNKNOWN — pendiente del POC**, pero indicios indirectos (grabadores de pantalla nativos capturan su audio) sugieren que no |
+| ¿Spotify bloquea la captura? | **CONFIRMADO: SÍ la bloquea** (Test A, dispositivo real, 2026-09-11) |
+| ¿YouTube (app de vídeo) bloquea la captura? | **CONFIRMADO: NO la bloquea** (Test A, mismo dispositivo/sesión) |
 
 ## APIs investigadas
 
@@ -120,13 +120,59 @@ con lo observado en cada test (A–F del spec).
 
 ## Resultados del POC
 
-_Pendiente — se completa tras probar en dispositivo físico._
+Dispositivo: Poco F7 Pro (HyperOS), Android con `targetSdk`/plataforma actual.
+Fecha: 2026-09-11.
 
 | Test | Spotify | YouTube |
 |---|---|---|
-| A — Audio received con reproducción normal | | |
-| B — Pantalla bloqueada | | |
-| C — Salida por Bluetooth | | |
-| D — Salida por cable | | |
-| E — Cambio de canción/vídeo | | |
-| F — Pausa | | |
+| A — Audio received con reproducción normal | ❌ **BLOQUEADO** | ✅ **FUNCIONA** |
+| B — Pantalla bloqueada | pendiente | pendiente |
+| C — Salida por Bluetooth | pendiente | pendiente |
+| D — Salida por cable | pendiente | pendiente |
+| E — Cambio de canción/vídeo | pendiente | pendiente |
+| F — Pausa | pendiente | pendiente |
+
+### Test A — Spotify: BLOQUEADO
+
+`AudioRecord` se construye e inicia sin errores (`REMOTE_SUBMIX`, 44100 Hz, estéreo),
+y `read()` no deja de recibir buffers — pero el contenido es silencio. Confirmado
+por dos vías independientes:
+
+1. **Logcat del sistema** (`AudioRecordImpl`, no es nuestro código):
+   ```
+   [audioRecordData][mute] 19s(f:0 m:19021 s:0)
+   ```
+   `f` (frames "fine"/reales) se queda en 0 mientras `m` (frames silenciados por
+   política de captura) crece sin parar, con Spotify sonando de fondo.
+2. **UI de la app**: `Capture state = Waiting for audio`, `Audio received = FALSE`,
+   `RMS level = 0,0000` de forma sostenida durante >7 millones de frames leídos.
+
+Esto es exactamente el comportamiento documentado para una app fuente con
+`ALLOW_CAPTURE_BY_NONE`: el sistema no lanza ningún error, simplemente entrega
+silencio en su lugar. Confirma los reportes públicos — Spotify bloquea
+`AudioPlaybackCaptureConfiguration` en este dispositivo/versión.
+
+### Test A — YouTube: FUNCIONA
+
+Al reproducir un vídeo en la app oficial de YouTube (sin detener la sesión de
+captura activa — la configuración no está filtrada a una app concreta), el mismo
+log cambia de categoría:
+
+```
+[audioRecordData][mute] 14s(f:0 m:14004 s:0)
+[audioRecordData][fine] 5s(f:5155 m:14329 s:0)     ← YouTube empieza a sonar aquí
+[audioRecordData][fine] 20s(f:20132 m:15142 s:0)
+```
+
+`f` crece con el tiempo real transcurrido mientras `m` se congela — el audio ya no
+se marca como silenciado. La UI de la app lo confirma: `Capture state = Processing`,
+`Audio received = TRUE`, `RMS level = 0,2645` (nivel real, no cero).
+
+### Implicación para el alcance del proyecto
+
+El spec original describe la app como "especialmente optimizada para Spotify".
+Con Spotify bloqueando la captura a nivel de plataforma (no hay forma legítima de
+sortearlo sin root/ingeniería inversa, ambas explícitamente prohibidas en el
+spec), **YouTube pasa a ser el objetivo viable real**, y Spotify queda descartado
+salvo que una versión futura de la app cambie su política de captura (fuera de
+nuestro control). Pendiente de decisión del usuario sobre cómo continuar.
