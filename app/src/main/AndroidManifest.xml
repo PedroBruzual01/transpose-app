@@ -1,17 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- AudioPlaybackCaptureConfiguration is built on top of AudioRecord, which
-         requires RECORD_AUDIO even though we are not touching the microphone. -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- Android 14+ (targetSdk 34+) requires this explicit foreground-service-type
-         permission, in addition to declaring foregroundServiceType on the <service>. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    <!-- Android 13+ requires runtime consent to show the persistent capture notification. -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
     <application
         android:allowBackup="false"
         android:label="@string/app_name"
@@ -27,11 +16,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <service
-            android:name=".audio.AudioCaptureService"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
 
     </application>
 </manifest>

@@ -10,17 +10,32 @@ android {
 
     defaultConfig {
         applicationId = "com.realtimetranspose"
-        // AudioPlaybackCaptureConfiguration (the whole reason this app exists)
-        // requires Android 10 / API 29 at minimum.
-        minSdk = 29
+        minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0-poc"
+        versionName = "0.1.0"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += ""
+                arguments += listOf("-DANDROID_STL=c++_static")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 
