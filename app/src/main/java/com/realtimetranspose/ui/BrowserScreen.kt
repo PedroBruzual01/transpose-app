@@ -2,11 +2,11 @@ package com.realtimetranspose.ui
 
 import android.annotation.SuppressLint
 import android.util.Base64
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,10 +27,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.realtimetranspose.BuildConfig
 import com.realtimetranspose.browser.AD_BLOCK_SCRIPT
 import com.realtimetranspose.browser.BrowserProbeBus
+import com.realtimetranspose.browser.DOM_FALLBACK_SCRIPT
 import com.realtimetranspose.browser.TransposeJsBridge
+import java.io.ByteArrayInputStream
 import java.util.Locale
 
 /**
@@ -219,6 +223,36 @@ private fun buildHookScript(engineSourceBase64: String): String = """
 })();
 """.trimIndent()
 
+// Complementary to AdBlockScript.kt's JSON patching, NOT a substitute for it:
+// domain/path blocking cannot stop YouTube's actual video ads (served from
+// the same googlevideo.com host as real video, deliberately, to defeat
+// exactly this). What this DOES catch: companion/display ad requests and
+// tracking beacons. Telemetry endpoints (log_event, attestation) are
+// deliberately left alone — suppressing them is itself a detectable signal
+// of ad-blocking that YouTube has been reported to react to by degrading the
+// page (missing comments/descriptions), and blocking them buys us nothing
+// against actual video ads.
+private val BLOCKED_HOSTS = listOf(
+    "doubleclick.net",
+    "googleadservices.com",
+    "googlesyndication.com",
+)
+private val BLOCKED_PATH_SUBSTRINGS = listOf(
+    "/pagead/",
+    "/ptracking",
+    "/api/stats/ads",
+    "/api/stats/qoe",
+)
+
+private fun shouldBlockNetworkRequest(url: String): Boolean {
+    if (BLOCKED_HOSTS.any { url.contains(it) }) return true
+    if (BLOCKED_PATH_SUBSTRINGS.any { url.contains(it) }) return true
+    // Ad-playback init ping, not a media segment — uBlock Origin blocks this
+    // exact pattern for the same reason.
+    if (url.contains("googlevideo.com/initplayback") && url.contains("oad=")) return true
+    return false
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserScreen() {
@@ -303,6 +337,7 @@ fun BrowserScreen() {
                         // in place before YouTube's own bootstrap script runs, and
                         // registration order is injection order.
                         WebViewCompat.addDocumentStartJavaScript(this, AD_BLOCK_SCRIPT, origins)
+                        WebViewCompat.addDocumentStartJavaScript(this, DOM_FALLBACK_SCRIPT, origins)
                         WebViewCompat.addDocumentStartJavaScript(this, hookScript, origins)
                     }
 
@@ -313,8 +348,23 @@ fun BrowserScreen() {
                             // (older WebView versions) — late, but better than nothing.
                             if (!supportsDocumentStart) {
                                 view.evaluateJavascript(AD_BLOCK_SCRIPT, null)
+                                view.evaluateJavascript(DOM_FALLBACK_SCRIPT, null)
                                 view.evaluateJavascript(hookScript, null)
                             }
+                        }
+
+                        override fun shouldInterceptRequest(
+                            view: WebView,
+                            request: WebResourceRequest,
+                        ): WebResourceResponse? {
+                            val url = request.url.toString()
+                            if (!shouldBlockNetworkRequest(url)) return null
+                            // Called off the main thread; MutableStateFlow's setter is
+                            // thread-safe, and Compose recomposes on the next frame.
+                            BrowserProbeBus.reportAdBlockEvent(
+                                "network-blocked:" + (request.url.host ?: "?"),
+                            )
+                            return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                         }
                     }
                     loadUrl("https://m.youtube.com")

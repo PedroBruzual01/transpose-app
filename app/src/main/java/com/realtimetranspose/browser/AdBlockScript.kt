@@ -194,3 +194,103 @@ const val AD_BLOCK_SCRIPT = """
   })();
 })();
 """
+
+/**
+ * Fallback for server-side ad insertion (SSAP): YouTube increasingly stitches
+ * some ads directly into the video stream itself — no separate request, no
+ * JSON field describing it, nothing [AD_BLOCK_SCRIPT] can strip. This is the
+ * only layer that can catch that case, and it's a best-effort last resort:
+ * clicks a skip button when one exists, and after 8s of a detected-but-
+ * unskippable ad, hard-skips by jumping `currentTime` to the end.
+ *
+ * Deliberately narrow about what it's allowed to touch, per the same hard
+ * rule as [AD_BLOCK_SCRIPT] and the pitch hook in
+ * [com.realtimetranspose.ui.BrowserScreen]: never replaces/clones/hides the
+ * `<video>` element itself, never sets `playbackRate` (the tempo slider owns
+ * that), never mutes (undefined once audio is routed through the Web Audio
+ * graph) — only CSS-hides known ad *container* elements and clicks/skips.
+ *
+ * Expect this to need retuning against live selectors over time — YouTube
+ * changes ad-related class names deliberately to break exactly this kind of
+ * script, and the mobile (m.youtube.com) selectors here are unverified
+ * against a live ad (none of our test videos carried one during Fase 0/1
+ * testing). Every action reports via `onAdBlockEvent('dom-fallback-fired:*')`
+ * — a rising count here means [AD_BLOCK_SCRIPT] is being bypassed and this
+ * fallback needs attention.
+ */
+const val DOM_FALLBACK_SCRIPT = """
+(function() {
+  if (window.__transposeDomFallback) return;
+  window.__transposeDomFallback = true;
+
+  function report(tag) {
+    if (window.TransposeBridge && window.TransposeBridge.onAdBlockEvent) {
+      try { window.TransposeBridge.onAdBlockEvent(tag); } catch (e) {}
+    }
+  }
+
+  var SKIP_SELECTORS = [
+    '.ytp-skip-ad-button', '.ytp-ad-skip-button', '.ytp-ad-skip-button-modern',
+    '.videoAdUiSkipButton', 'button.ytp-ad-skip-button-container',
+    '[class*="skip-button"]', '[class*="SkipButton"]'
+  ];
+  var HIDE_SELECTORS = [
+    '#player-ads', '#masthead-ad', 'ytd-ad-slot-renderer',
+    'ytm-companion-ad-renderer', '.ytp-ad-overlay-container',
+    'ytd-enforcement-message-view-model', 'ytm-promoted-sparkles-web-renderer'
+  ];
+
+  // Cosmetic only — CSS-hide, never remove/replace a node.
+  try {
+    var style = document.createElement('style');
+    style.textContent = HIDE_SELECTORS.join(', ') + ' { display: none !important; }';
+    (document.head || document.documentElement).appendChild(style);
+  } catch (e) {}
+
+  function findSkipButton() {
+    for (var i = 0; i < SKIP_SELECTORS.length; i++) {
+      var el = document.querySelector(SKIP_SELECTORS[i]);
+      if (el && el.offsetParent !== null) return el;
+    }
+    return null;
+  }
+
+  function isAdShowing() {
+    var player = document.querySelector('.html5-video-player, #movie_player');
+    if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
+      return true;
+    }
+    var adModule = document.querySelector('.ytp-ad-module, .ytp-ad-player-overlay');
+    return !!(adModule && adModule.children.length > 0);
+  }
+
+  var adSeenAtMs = null;
+  setInterval(function() {
+    try {
+      if (!isAdShowing()) { adSeenAtMs = null; return; }
+      if (!adSeenAtMs) adSeenAtMs = Date.now();
+
+      var skipBtn = findSkipButton();
+      if (skipBtn) {
+        skipBtn.click();
+        report('dom-fallback-fired:skip-click');
+        return;
+      }
+
+      // No skip button after 8s of a detected ad — assume non-skippable or
+      // server-stitched, and hard-skip via currentTime instead of touching
+      // playbackRate (owned by the tempo slider) or mute (undefined once
+      // routed through the Web Audio graph).
+      if (Date.now() - adSeenAtMs > 8000) {
+        var video = window.__transposeVideo || document.querySelector('video');
+        if (video && video.duration && isFinite(video.duration)) {
+          video.currentTime = video.duration - 0.1;
+          report('dom-fallback-fired:hard-skip');
+        }
+      }
+    } catch (e) {
+      report('dom-fallback-error:' + e.message);
+    }
+  }, 500);
+})();
+"""

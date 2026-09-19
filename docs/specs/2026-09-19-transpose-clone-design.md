@@ -139,12 +139,29 @@ UI como "AdBlock: prune:adPlacements×3, ...") — es la señal de aceptación
 real ("de verdad quitó algo"), no "no vi ningún anuncio" (la mayoría de
 vídeos no tienen anuncios de por sí).
 
-Pendiente, no implementado en esta pasada (quedan como mejoras futuras):
-bloqueo de red complementario (`shouldInterceptRequest` para
-doubleclick.net/telemetría), fallback por DOM para anuncios insertados en el
-propio stream (server-side ad insertion, cada vez más común), y vigilancia
-de la API de integridad de WebView de Google que podría inutilizar este
-enfoque en el futuro sin previo aviso.
+Completado en una pasada posterior (2026-09-20), también probado en
+dispositivo real y funcionando:
+- **Bloqueo de red complementario** (`shouldInterceptRequest` en
+  `BrowserScreen.kt`): doubleclick.net, googleadservices.com,
+  googlesyndication.com, `/pagead/`, `/ptracking`, `/api/stats/ads`,
+  `/api/stats/qoe`, y el ping de init de anuncio de `googlevideo.com`. Deja
+  aparte a propósito los endpoints de telemetría/attestation
+  (`log_event`, `att`) — bloquearlos no para anuncios de vídeo y es
+  precisamente el tipo de señal que YouTube usa para detectar bloqueadores.
+- **Fallback por DOM** (`DOM_FALLBACK_SCRIPT` en `AdBlockScript.kt`) para
+  anuncios insertados directamente en el stream (server-side ad insertion),
+  que el bloqueo JSON no puede tocar por definición: clic automático al
+  botón de saltar si existe, salto forzado de `currentTime` a los 8s si no.
+  Nunca toca `playbackRate` (lo controla el slider de tempo) ni silencia
+  (comportamiento indefinido tras enrutar por Web Audio) — solo oculta por
+  CSS y hace clic/salta. Selectores no verificados contra un anuncio real en
+  pruebas (ninguno de los vídeos probados traía anuncios); a revisar si deja
+  de funcionar.
+
+Queda pendiente, sin implementar: vigilancia de la API de integridad de
+WebView de Google, que podría inutilizar este enfoque en el futuro sin
+previo aviso (no hay nada que hacer al respecto de antemano, solo estar
+atentos si el bloqueo deja de funcionar de golpe).
 
 ## Fase 0 del Modo navegador — resultado (2026-09-19)
 
