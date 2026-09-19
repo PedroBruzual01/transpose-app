@@ -71,7 +71,7 @@ namespace `com.realtimetranspose`, NDK/CMake toolchain validado.
 - [x] NDK/CMake + Rubber Band vendorizado (compila para arm64-v8a/armeabi-v7a/x86_64)
 - [x] JNI bridge (usa el bridge oficial de Rubber Band, sin código propio)
 - [x] Pipeline de decodificación de archivo + AudioTrack (`TransposePlayer`)
-- [x] UI modo archivo (`FilePlayerScreen`) — pendiente de probar en dispositivo real
+- [x] UI modo archivo (`FilePlayerScreen`) — **probado en Poco F7 Pro real, funciona** (FLAC, pitch -3, sin errores)
 - [ ] Loop A-B (diferido, no bloqueante)
 - [ ] Fase 0 de investigación del modo navegador
 - [ ] Modo navegador
