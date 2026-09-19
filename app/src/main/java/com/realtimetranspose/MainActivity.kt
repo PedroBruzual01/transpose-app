@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.realtimetranspose.audio.TransposePlayer
@@ -69,7 +70,7 @@ class MainActivity : ComponentActivity() {
 /** Tab shell: Files (Modo A, working) / Browser (Modo B, Fase 0 spike screen). */
 @Composable
 private fun AppRoot(onPickFile: () -> Unit) {
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     val titles = listOf("Files", "Browser")
 
     Surface(modifier = Modifier.fillMaxSize()) {

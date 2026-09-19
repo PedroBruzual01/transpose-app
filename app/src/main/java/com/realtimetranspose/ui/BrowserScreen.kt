@@ -91,39 +91,75 @@ private fun buildHookScript(engineSourceBase64: String): String = """
     }
   }
 
+  // Last known slider values, applied automatically to whatever video becomes
+  // active next (autoplay/Shorts-swipe switches videos without the user
+  // touching a slider, so the new video must not silently reset to 0/1x).
+  window.__transposeLastPitch = window.__transposeLastPitch || 0;
+  window.__transposeLastTempo = window.__transposeLastTempo || 1;
+
   window.TransposeControl = {
     setPitchSemitones: function(v) {
+      window.__transposeLastPitch = v;
       if (window.__transposePitchNode) window.__transposePitchNode.setPitchSemitones(v);
     },
     setTempo: function(v) {
+      window.__transposeLastTempo = v;
       if (window.__transposeVideo) window.__transposeVideo.playbackRate = v;
     }
   };
 
-  function hook(video) {
-    if (video.__transposeConnected) return;
-    video.__transposeConnected = true;
+  // YouTube is a SPA: video-to-video navigation, autoplay, and Shorts swipes
+  // don't necessarily reload the page or even replace the <video> element —
+  // sometimes it's the same element with a new source, sometimes (Shorts
+  // especially, which preloads several <video> elements at once for
+  // adjacent reels) it's a different element entirely. `activateVideo`
+  // handles both: no-op if it's the element we're already hooked to, cheap
+  // reconnect (no new MediaElementAudioSourceNode — only one is ever allowed
+  // per element) if we've seen this exact element before, full hook if not.
+  function activateVideo(video) {
+    if (!video || video === window.__transposeVideo) return;
+
+    var previous = window.__transposePitchNode;
+    if (previous) previous.node.disconnect();
+
+    video.preservesPitch = true;
+    window.__transposeVideo = video;
+    video.playbackRate = window.__transposeLastTempo;
+
     try {
-      video.preservesPitch = true;
-      window.__transposeVideo = video;
-
       var ctx = window.__transposeCtx || (window.__transposeCtx = new (window.AudioContext || window.webkitAudioContext)());
+
+      if (video.__transposePitchShift) {
+        // Re-activating an element we hooked before (e.g. swiped back to a
+        // previous Short) — just reconnect its existing chain.
+        var existing = video.__transposePitchShift;
+        existing.node.connect(existing.analyser);
+        existing.node.connect(ctx.destination);
+        window.__transposePitchNode = existing;
+        existing.setPitchSemitones(window.__transposeLastPitch);
+        window.TransposeBridge && window.TransposeBridge.onHookResult('OK (reattached) ctxState=' + ctx.state);
+        return;
+      }
+
       var source = ctx.createMediaElementSource(video);
-
       var pitchShift = window.TransposeSoundTouch.createPitchShiftNode(ctx, 4096);
-      window.__transposePitchNode = pitchShift;
-
       var analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
 
       source.connect(pitchShift.node);
       pitchShift.node.connect(analyser);
       pitchShift.node.connect(ctx.destination);
+      pitchShift.analyser = analyser;
+      pitchShift.setPitchSemitones(window.__transposeLastPitch);
+
+      video.__transposePitchShift = pitchShift;
+      window.__transposePitchNode = pitchShift;
 
       window.TransposeBridge && window.TransposeBridge.onHookResult('OK ctxState=' + ctx.state);
 
       var data = new Uint8Array(analyser.frequencyBinCount);
       setInterval(function() {
+        if (window.__transposeVideo !== video) return; // this video is no longer active; stop reporting for it
         analyser.getByteTimeDomainData(data);
         var sum = 0;
         for (var i = 0; i < data.length; i++) {
@@ -138,13 +174,48 @@ private fun buildHookScript(engineSourceBase64: String): String = """
     }
   }
 
-  function scan() {
-    var v = document.querySelector('video');
-    if (v) hook(v);
+  // Prefer a video that's actually playing (the "active" one when several
+  // are present, as YouTube does for Shorts preloading); fall back to the
+  // first video with any metadata loaded so we still hook something before
+  // playback starts.
+  function findActiveVideo() {
+    var videos = document.querySelectorAll('video');
+    var fallback = null;
+    for (var i = 0; i < videos.length; i++) {
+      var v = videos[i];
+      if (!v.paused) return v;
+      if (!fallback && v.readyState > 0) fallback = v;
+    }
+    return fallback || videos[0] || null;
   }
 
+  function scan() {
+    activateVideo(findActiveVideo());
+  }
+
+  // Three independent triggers, since no single one is reliably fired for
+  // every way YouTube can switch videos:
+  // 1. yt-navigate-finish — YouTube's own SPA-navigation-complete event,
+  //    fired on document; precise and immediate when it fires.
+  var scanDebounceTimer = null;
+  function debouncedScan() {
+    if (scanDebounceTimer) clearTimeout(scanDebounceTimer);
+    scanDebounceTimer = setTimeout(scan, 200);
+  }
+  document.addEventListener('yt-navigate-finish', scan, true);
+  // 2. 'play' events (capture phase, so it fires for any <video>, not just
+  //    ones already known to us) — catches Shorts swipes and similar cases
+  //    that may not dispatch yt-navigate-finish.
+  document.addEventListener('play', function(e) {
+    if (e.target && e.target.tagName === 'VIDEO') scan();
+  }, true);
+  // 3. MutationObserver, debounced — a fallback net for anything the two
+  //    event-based triggers above miss.
+  new MutationObserver(debouncedScan).observe(document.documentElement, {childList: true, subtree: true});
+  // 4. Periodic safety-net poll, in case all of the above miss a transition.
+  setInterval(scan, 1500);
+
   scan();
-  new MutationObserver(scan).observe(document.documentElement, {childList: true, subtree: true});
 })();
 """.trimIndent()
 

@@ -12,7 +12,13 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop">
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode">
+            <!-- Rotation must not destroy/recreate the Activity: that would tear down
+                 the Browser tab's WebView entirely — the loaded video, its hooked Web
+                 Audio graph (AudioContext, pitch-shift node, MutationObservers), and
+                 any playback position — not just the selected tab. Handling the
+                 config change ourselves (Compose just re-lays-out) avoids all of it. -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
