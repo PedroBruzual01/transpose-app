@@ -73,5 +73,31 @@ namespace `com.realtimetranspose`, NDK/CMake toolchain validado.
 - [x] Pipeline de decodificación de archivo + AudioTrack (`TransposePlayer`)
 - [x] UI modo archivo (`FilePlayerScreen`) — **probado en Poco F7 Pro real, funciona** (FLAC, pitch -3, sin errores)
 - [ ] Loop A-B (diferido, no bloqueante)
-- [ ] Fase 0 de investigación del modo navegador
-- [ ] Modo navegador
+- [x] Fase 0 de investigación del modo navegador — **CONFIRMADO: funciona** (ver más abajo)
+- [ ] Modo navegador — implementación real (pitch-shift, controles, re-enganche al cambiar de vídeo)
+
+## Fase 0 del Modo navegador — resultado (2026-09-19)
+
+**Pregunta:** ¿el `<video>` de YouTube, enganchado a un `MediaElementAudioSourceNode`
+dentro de nuestro propio WebView, entrega audio real o silencio por CORS-taint?
+
+**Respuesta: entrega audio real.** Probado en el Poco F7 Pro con YouTube de
+verdad (m.youtube.com, canción "Fine Again" de Seether, contenido gratuito sin
+DRM). El script inyectado (`BrowserScreen.kt`) engancha el `<video>`, lo
+conecta a un `AnalyserNode` + `ctx.destination`, y mide RMS cada segundo igual
+que hicimos con la captura nativa en la Fase 1:
+
+```
+Hook: OK ctxState=running
+Nivel: 0.0992 (ctx=running, muestras=156)
+```
+
+Nivel sostenido y no-cero durante 156 muestras (~2.5 minutos), audio
+perfectamente audible en todo momento — confirma la hipótesis: YouTube sirve
+vídeo vía MSE (el propio JS de la página inyecta los bytes con
+`appendBuffer()`), lo que aparentemente no dispara la misma comprobación
+CORS/origin-clean que un `<video src="https://otro-dominio">` directo sí
+dispararía. A diferencia de Spotify (Fase 1), aquí no hay bloqueo — vía libre
+para construir el pitch-shifting real sobre esta base.
+
+Captura de pantalla: `docs/poc-results/browser-probe.png`.
