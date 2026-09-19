@@ -52,6 +52,8 @@ fun FilePlayerScreen(onPickFile: () -> Unit) {
                 HorizontalDivider()
                 PlaybackControls(state)
                 HorizontalDivider()
+                LoopControls(state)
+                HorizontalDivider()
                 PitchSpeedControls(state)
             }
         }
@@ -77,6 +79,29 @@ private fun PlaybackControls(state: PlayerState) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatMs(state.positionMs), style = MaterialTheme.typography.bodySmall)
             Text(formatMs(state.durationMs), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun LoopControls(state: PlayerState) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            when {
+                state.isLoopActive -> "Loop: ${formatMs(state.loopStartMs!!)} → ${formatMs(state.loopEndMs!!)}"
+                state.loopStartMs != null -> "Loop: A=${formatMs(state.loopStartMs)}, falta B"
+                else -> "Loop: desactivado"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { TransposePlayer.markLoopStart() }) { Text("Set A") }
+            Button(onClick = { TransposePlayer.markLoopEnd() }) { Text("Set B") }
+            Button(onClick = { TransposePlayer.clearLoop() }) { Text("Clear") }
         }
     }
 }

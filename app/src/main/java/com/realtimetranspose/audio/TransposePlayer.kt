@@ -18,7 +18,13 @@ data class PlayerState(
     val speed: Float = 1f,
     val fileName: String? = null,
     val error: String? = null,
-)
+    val loopStartMs: Long? = null,
+    val loopEndMs: Long? = null,
+) {
+    /** Both points set, in the right order — the only case actually looped. */
+    val isLoopActive: Boolean
+        get() = loopStartMs != null && loopEndMs != null && loopEndMs > loopStartMs
+}
 
 /**
  * Owns the whole decode → pitch/tempo-shift → play pipeline for one file at a
@@ -54,6 +60,10 @@ object TransposePlayer {
 
     @Volatile private var speed = 1f
 
+    @Volatile private var loopStartMs: Long? = null
+
+    @Volatile private var loopEndMs: Long? = null
+
     fun load(context: Context, uri: Uri, displayName: String?) {
         stop()
 
@@ -61,6 +71,8 @@ object TransposePlayer {
         keepRunning = true
         playRequested = false
         pendingSeekUs = null
+        loopStartMs = null
+        loopEndMs = null
 
         worker = Thread({ runPipeline(context.applicationContext, uri) }, "TransposePlaybackThread").apply {
             start()
@@ -88,6 +100,26 @@ object TransposePlayer {
         val clamped = value.coerceIn(0.25f, 4f)
         speed = clamped
         _state.value = _state.value.copy(speed = clamped)
+    }
+
+    /** Marks the current playback position as the loop's start (A) point. */
+    fun markLoopStart() {
+        val ms = _state.value.positionMs
+        loopStartMs = ms
+        _state.value = _state.value.copy(loopStartMs = ms)
+    }
+
+    /** Marks the current playback position as the loop's end (B) point. */
+    fun markLoopEnd() {
+        val ms = _state.value.positionMs
+        loopEndMs = ms
+        _state.value = _state.value.copy(loopEndMs = ms)
+    }
+
+    fun clearLoop() {
+        loopStartMs = null
+        loopEndMs = null
+        _state.value = _state.value.copy(loopStartMs = null, loopEndMs = null)
     }
 
     fun stop() {
@@ -200,9 +232,20 @@ object TransposePlayer {
                         read > 0 -> {
                             engine.process(inputBuffers, read, false)
                             framesFed += read
-                            _state.value = _state.value.copy(
-                                positionMs = framesFed * 1000 / decoder.sampleRate,
-                            )
+                            val newPositionMs = framesFed * 1000 / decoder.sampleRate
+                            _state.value = _state.value.copy(positionMs = newPositionMs)
+
+                            // Loop-back check. Granularity is one CHUNK_FRAMES read
+                            // (~93ms at 44.1kHz) — not sample-accurate, but the whole
+                            // pipeline already buffers well beyond that, so it's not
+                            // the limiting factor for a practice-loop feature.
+                            val loopStart = loopStartMs
+                            val loopEnd = loopEndMs
+                            if (loopStart != null && loopEnd != null && loopEnd > loopStart &&
+                                newPositionMs >= loopEnd
+                            ) {
+                                pendingSeekUs = loopStart * 1000
+                            }
                         }
                     }
                 }
