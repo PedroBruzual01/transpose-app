@@ -74,7 +74,48 @@ namespace `com.realtimetranspose`, NDK/CMake toolchain validado.
 - [x] UI modo archivo (`FilePlayerScreen`) — **probado en Poco F7 Pro real, funciona** (FLAC, pitch -3, sin errores)
 - [ ] Loop A-B (diferido, no bloqueante)
 - [x] Fase 0 de investigación del modo navegador — **CONFIRMADO: funciona** (ver más abajo)
-- [ ] Modo navegador — implementación real (pitch-shift, controles, re-enganche al cambiar de vídeo)
+- [x] Motor de pitch/tempo real en el navegador (`@soundtouchjs/audio-worklet`, LGPL-2.1) — compila, pendiente de probar en dispositivo
+- [x] Bloqueo de anuncios de YouTube (investigado con un agente de planning en Opus, ver sección propia más abajo) — compila, pendiente de probar en dispositivo
+- [ ] Re-enganche robusto al cambiar de vídeo (SPA) — cubierto en parte por el `MutationObserver` existente, sin probar a fondo todavía
+
+## Bloqueo de anuncios de YouTube
+
+El usuario pidió investigar alternativas a "usar Brave" (no es viable —
+Android no permite embeber la UI de otra app, y usar un navegador externo vía
+Custom Tabs perdería la capacidad de inyectar JS que hace posible todo el
+Modo navegador). Investigación delegada a un agente de planning con Opus.
+
+**Hallazgo clave:** bloquear por dominio (`shouldInterceptRequest`) no para
+los anuncios de vídeo — salen del mismo `googlevideo.com` que el vídeo real,
+a propósito, para burlar justo ese tipo de bloqueo. Lo que sí funciona es
+**interceptar y limpiar la respuesta JSON del reproductor** (quitar
+`adPlacements`, `playerAds`, `adSlots`, etc.) antes de que el propio código
+de YouTube la procese — la misma técnica que usa uBlock Origin internamente.
+
+Implementado en `AdBlockScript.kt`: hooks sobre `JSON.parse`,
+`Response.prototype.json`, `fetch` y `XMLHttpRequest`, más una trampa sobre
+`window.ytInitialPlayerResponse`. Requiere inyección en **document-start**
+(antes de que corra cualquier script de la página) vía
+`WebViewCompat.addDocumentStartJavaScript` (librería `androidx.webkit`) — el
+punto de inyección anterior (`onPageFinished`) llegaba demasiado tarde tanto
+para esto como, en rigor, para el propio hook de pitch-shifting.
+
+Regla dura compartida con el hook de audio: el bloqueador **nunca** debe
+reemplazar ni clonar el `<video>` (algunos bloqueadores lo hacen vía
+iframe-swap) — rompería `createMediaElementSource()`, que solo funciona una
+vez por elemento.
+
+Cada limpieza reporta un evento contable a `BrowserProbeBus` (visible en la
+UI como "AdBlock: prune:adPlacements×3, ...") — es la señal de aceptación
+real ("de verdad quitó algo"), no "no vi ningún anuncio" (la mayoría de
+vídeos no tienen anuncios de por sí).
+
+Pendiente, no implementado en esta pasada (quedan como mejoras futuras):
+bloqueo de red complementario (`shouldInterceptRequest` para
+doubleclick.net/telemetría), fallback por DOM para anuncios insertados en el
+propio stream (server-side ad insertion, cada vez más común), y vigilancia
+de la API de integridad de WebView de Google que podría inutilizar este
+enfoque en el futuro sin previo aviso.
 
 ## Fase 0 del Modo navegador — resultado (2026-09-19)
 

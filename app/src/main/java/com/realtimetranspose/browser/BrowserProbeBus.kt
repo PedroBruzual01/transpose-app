@@ -15,6 +15,10 @@ data class BrowserProbeState(
     val lastLevel: Float = 0f,
     val audioContextState: String? = null,
     val sampleCount: Int = 0,
+    // Ad-block event tag -> occurrence count, e.g. "prune:adPlacements" -> 3.
+    // The acceptance signal for the ad-block script: counts rising means it's
+    // actually stripping ad data, not just "I didn't happen to see an ad".
+    val adBlockEvents: Map<String, Int> = emptyMap(),
 )
 
 object BrowserProbeBus {
@@ -32,6 +36,13 @@ object BrowserProbeBus {
             audioContextState = contextState,
             sampleCount = current.sampleCount + 1,
         )
+    }
+
+    fun reportAdBlockEvent(tag: String) {
+        val current = _state.value
+        val counts = current.adBlockEvents.toMutableMap()
+        counts[tag] = (counts[tag] ?: 0) + 1
+        _state.value = current.copy(adBlockEvents = counts)
     }
 
     fun reset() {

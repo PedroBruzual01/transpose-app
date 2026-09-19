@@ -19,4 +19,10 @@ class TransposeJsBridge {
     fun onLevel(levelStr: String, contextState: String) {
         BrowserProbeBus.reportLevel(levelStr.toFloatOrNull() ?: 0f, contextState)
     }
+
+    /** Called by the ad-block script every time it actually strips something. */
+    @JavascriptInterface
+    fun onAdBlockEvent(tag: String) {
+        BrowserProbeBus.reportAdBlockEvent(tag)
+    }
 }
