@@ -74,9 +74,38 @@ namespace `com.realtimetranspose`, NDK/CMake toolchain validado.
 - [x] UI modo archivo (`FilePlayerScreen`) — **probado en Poco F7 Pro real, funciona** (FLAC, pitch -3, sin errores)
 - [ ] Loop A-B (diferido, no bloqueante)
 - [x] Fase 0 de investigación del modo navegador — **CONFIRMADO: funciona** (ver más abajo)
-- [x] Motor de pitch/tempo real en el navegador (`@soundtouchjs/audio-worklet`, LGPL-2.1) — compila, pendiente de probar en dispositivo
-- [x] Bloqueo de anuncios de YouTube (investigado con un agente de planning en Opus, ver sección propia más abajo) — compila, pendiente de probar en dispositivo
+- [x] Motor de pitch real en el navegador — **probado en dispositivo real, funciona.** Ver "Cambio de motor" más abajo: `@soundtouchjs/audio-worklet` (AudioWorkletNode) quedó descartado por CSP; sustituido por `@soundtouchjs/core` sobre `ScriptProcessorNode`, bundleado a mano con esbuild
+- [x] Velocidad/tempo en el navegador vía `video.playbackRate` nativo (preserva tono por defecto) — independiente del pitch
+- [x] Bloqueo de anuncios de YouTube (investigado con un agente de planning en Opus) — eventos de limpieza confirmados en dispositivo real (`prune:adBreakHeartbeatParams×2`, `fetch-pruned×1`, `prune:playerAds×1`, `prune:adSlots×1`)
 - [ ] Re-enganche robusto al cambiar de vídeo (SPA) — cubierto en parte por el `MutationObserver` existente, sin probar a fondo todavía
+
+## Cambio de motor: de AudioWorklet a ScriptProcessorNode (2026-09-20)
+
+`@soundtouchjs/audio-worklet` (la primera opción, un `AudioWorkletNode` real)
+quedó bloqueada por la CSP de YouTube: `require-trusted-types-for 'script'`
++ `script-src ... 'strict-dynamic'` impide que `audioWorklet.addModule()`
+cargue un módulo desde un blob URL (`AbortError: unable to load a worklet's
+module`), incluso envolviendo la URL con una política Trusted Types — el
+bloqueo real está en `script-src`/`worker-src`, no solo en Trusted Types.
+
+Sustituido por `@soundtouchjs/core` (el motor DSP puro, sin capa de
+Worklet) conducido a mano mediante un `ScriptProcessorNode` — no necesita
+cargar ningún módulo aparte, así que nunca choca con esa CSP. Es una API
+obsoleta (corre en el hilo principal, no en el hilo de audio dedicado) pero
+sigue soportada en todos los navegadores actuales. Bundleado nosotros mismos
+con esbuild (`@soundtouchjs/core` solo publica ESM con una dependencia
+externa, `@soundtouchjs/interpolation-strategy-lanczos`) en un único IIFE de
+~26 KB sin dependencias, en `assets/soundtouch-scriptprocessor.js`. El motor
+de tempo/velocidad ya no pasa por SoundTouch en absoluto — se delegó a
+`video.playbackRate` nativo (Chromium preserva el tono por defecto), con lo
+que pitch y velocidad quedan totalmente independientes con mucho menos
+código.
+
+Además, el propio `eval()` usado para cargar el motor bundleado tropezó con
+la misma CSP: aunque `'unsafe-eval'` está permitido, `require-trusted-types-for
+'script'` exige que el argumento de `eval()` sea un `TrustedScript`, no una
+cadena suelta — mismo patrón de política permisiva que ya se usaba para el
+blob URL del worklet, aplicado aquí a `trustedTypes.createPolicy(...).createScript(...)`.
 
 ## Bloqueo de anuncios de YouTube
 

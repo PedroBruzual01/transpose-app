@@ -35,46 +35,68 @@ import java.util.Locale
 
 /**
  * Phase B (browser mode): hooks YouTube's own `<video>` element into a real
- * Web Audio pitch/tempo-shift graph — confirmed viable in the Fase 0 spike
+ * Web Audio pitch-shift graph — confirmed viable in the Fase 0 spike
  * (docs/specs/2026-09-19-transpose-clone-design.md): YouTube's MSE-backed
  * video is not CORS-tainted inside our own WebView, so this is a clean
  * replacement of the audio, not an overlay (unlike the native-capture
  * approach that got blocked by Spotify in Phase 1).
  *
- * Pitch/tempo engine: @soundtouchjs/audio-worklet (LGPL-2.1), vendored as
- * assets/soundtouch-worklet.js — a real AudioWorkletProcessor, so shifting
- * happens on the audio rendering thread, not the page's main thread.
- * Base64-embedded into the injected script and loaded via a blob: URL,
- * since `audioWorklet.addModule()` needs a fetchable module URL and there's
- * no server to point it at inside a WebView.
+ * Pitch engine: `@soundtouchjs/core` (MPL-2.0), bundled ourselves (esbuild,
+ * see docs/specs) into a dependency-free IIFE at
+ * assets/soundtouch-scriptprocessor.js, driven through a plain
+ * `ScriptProcessorNode` rather than `@soundtouchjs/audio-worklet`'s
+ * `AudioWorkletNode`. That's deliberate: YouTube's CSP
+ * (`require-trusted-types-for 'script'`, `script-src ... 'strict-dynamic'`)
+ * blocks `audioWorklet.addModule()` from loading a blob: URL module —
+ * `ScriptProcessorNode` needs no separate module fetch at all, so it never
+ * hits that wall. It's deprecated and runs on the main thread instead of a
+ * dedicated audio-rendering thread, but every current browser still
+ * supports it, which a CSP-blocked AudioWorkletNode does not help with.
+ *
+ * Tempo/speed is handled separately, natively: `video.playbackRate`, which
+ * Chromium keeps pitch-preserving by default — no DSP needed for that half,
+ * and it composes cleanly with our independent pitch shift on top.
  *
  * Graph per hooked video:
- *   MediaElementAudioSourceNode -> AudioWorkletNode('soundtouch-processor') -> AnalyserNode -> destination
+ *   MediaElementAudioSourceNode -> ScriptProcessorNode (pitch shift) -> AnalyserNode -> destination
  *
  * Native controls reach the page via `window.TransposeControl.set*()`,
  * called through WebView.evaluateJavascript() from [BrowserScreen]'s
  * `AndroidView` update block.
  */
-private fun buildHookScript(processorSourceBase64: String): String = """
+private fun buildHookScript(engineSourceBase64: String): String = """
 (function() {
   if (window.__transposeHooked) return;
   window.__transposeHooked = true;
 
-  var processorBlobUrl = null;
-  function getProcessorBlobUrl() {
-    if (processorBlobUrl) return processorBlobUrl;
-    var src = atob("$processorSourceBase64");
-    var blob = new Blob([src], { type: 'application/javascript' });
-    processorBlobUrl = URL.createObjectURL(blob);
-    return processorBlobUrl;
+  if (!window.TransposeSoundTouch) {
+    try {
+      // YouTube's CSP includes 'unsafe-eval', but also
+      // `require-trusted-types-for 'script'`, which still requires eval's
+      // argument to be a TrustedScript (not a raw string) — same story as
+      // the worklet blob: URL needing a TrustedScriptURL before. Same
+      // permissive policy pattern: no `trusted-types <allowed names>`
+      // directive restricts which policy names may be created.
+      var src = atob("$engineSourceBase64");
+      if (window.trustedTypes && window.trustedTypes.createPolicy) {
+        var evalPolicy = window.trustedTypes.createPolicy('transpose-eval', {
+          createScript: function(s) { return s; }
+        });
+        (0, eval)(evalPolicy.createScript(src));
+      } else {
+        (0, eval)(src);
+      }
+    } catch (e) {
+      window.TransposeBridge && window.TransposeBridge.onHookResult('EVAL ERROR ' + e.name + ': ' + e.message);
+    }
   }
 
   window.TransposeControl = {
     setPitchSemitones: function(v) {
-      if (window.__transposeNode) window.__transposeNode.parameters.get('pitchSemitones').value = v;
+      if (window.__transposePitchNode) window.__transposePitchNode.setPitchSemitones(v);
     },
     setTempo: function(v) {
-      if (window.__transposeNode) window.__transposeNode.parameters.get('tempo').value = v;
+      if (window.__transposeVideo) window.__transposeVideo.playbackRate = v;
     }
   };
 
@@ -82,38 +104,37 @@ private fun buildHookScript(processorSourceBase64: String): String = """
     if (video.__transposeConnected) return;
     video.__transposeConnected = true;
     try {
+      video.preservesPitch = true;
+      window.__transposeVideo = video;
+
       var ctx = window.__transposeCtx || (window.__transposeCtx = new (window.AudioContext || window.webkitAudioContext)());
       var source = ctx.createMediaElementSource(video);
 
-      ctx.audioWorklet.addModule(getProcessorBlobUrl()).then(function() {
-        var node = new AudioWorkletNode(ctx, 'soundtouch-processor');
-        window.__transposeNode = node;
+      var pitchShift = window.TransposeSoundTouch.createPitchShiftNode(ctx, 4096);
+      window.__transposePitchNode = pitchShift;
 
-        var analyser = ctx.createAnalyser();
-        analyser.fftSize = 2048;
+      var analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
 
-        source.connect(node);
-        node.connect(analyser);
-        node.connect(ctx.destination);
+      source.connect(pitchShift.node);
+      pitchShift.node.connect(analyser);
+      pitchShift.node.connect(ctx.destination);
 
-        window.TransposeBridge && window.TransposeBridge.onHookResult('OK ctxState=' + ctx.state);
+      window.TransposeBridge && window.TransposeBridge.onHookResult('OK ctxState=' + ctx.state);
 
-        var data = new Uint8Array(analyser.frequencyBinCount);
-        setInterval(function() {
-          analyser.getByteTimeDomainData(data);
-          var sum = 0;
-          for (var i = 0; i < data.length; i++) {
-            var v = (data[i] - 128) / 128;
-            sum += v * v;
-          }
-          var rms = Math.sqrt(sum / data.length);
-          if (window.TransposeBridge) window.TransposeBridge.onLevel(rms.toFixed(4), ctx.state);
-        }, 1000);
-      }).catch(function(e) {
-        window.TransposeBridge && window.TransposeBridge.onHookResult('WORKLET ERROR ' + e.message);
-      });
+      var data = new Uint8Array(analyser.frequencyBinCount);
+      setInterval(function() {
+        analyser.getByteTimeDomainData(data);
+        var sum = 0;
+        for (var i = 0; i < data.length; i++) {
+          var v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        var rms = Math.sqrt(sum / data.length);
+        if (window.TransposeBridge) window.TransposeBridge.onLevel(rms.toFixed(4), ctx.state);
+      }, 1000);
     } catch (e) {
-      window.TransposeBridge && window.TransposeBridge.onHookResult('ERROR ' + e.message);
+      window.TransposeBridge && window.TransposeBridge.onHookResult('ERROR ' + e.name + ': ' + e.message);
     }
   }
 
@@ -136,11 +157,11 @@ fun BrowserScreen() {
     var pitchSemitones by remember { mutableFloatStateOf(0f) }
     var tempo by remember { mutableFloatStateOf(1f) }
 
-    val processorSourceBase64 = remember {
-        val bytes = context.assets.open("soundtouch-worklet.js").use { it.readBytes() }
+    val engineSourceBase64 = remember {
+        val bytes = context.assets.open("soundtouch-scriptprocessor.js").use { it.readBytes() }
         Base64.encodeToString(bytes, Base64.NO_WRAP)
     }
-    val hookScript = remember(processorSourceBase64) { buildHookScript(processorSourceBase64) }
+    val hookScript = remember(engineSourceBase64) { buildHookScript(engineSourceBase64) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.padding(12.dp)) {
