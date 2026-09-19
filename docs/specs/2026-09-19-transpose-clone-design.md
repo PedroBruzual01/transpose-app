@@ -67,10 +67,11 @@ namespace `com.realtimetranspose`, NDK/CMake toolchain validado.
 ## Estado
 
 - [x] Diseño aprobado por el usuario (2026-09-19)
-- [ ] Limpieza del código de captura en vivo
-- [ ] NDK/CMake + Rubber Band vendorizado
-- [ ] JNI bridge (`PitchShiftEngine`)
-- [ ] Pipeline de decodificación de archivo + AudioTrack
-- [ ] UI modo archivo
+- [x] Limpieza del código de captura en vivo
+- [x] NDK/CMake + Rubber Band vendorizado (compila para arm64-v8a/armeabi-v7a/x86_64)
+- [x] JNI bridge (usa el bridge oficial de Rubber Band, sin código propio)
+- [x] Pipeline de decodificación de archivo + AudioTrack (`TransposePlayer`)
+- [x] UI modo archivo (`FilePlayerScreen`) — pendiente de probar en dispositivo real
+- [ ] Loop A-B (diferido, no bloqueante)
 - [ ] Fase 0 de investigación del modo navegador
 - [ ] Modo navegador
