@@ -25,4 +25,10 @@ class TransposeJsBridge {
     fun onAdBlockEvent(tag: String) {
         BrowserProbeBus.reportAdBlockEvent(tag)
     }
+
+    /** Fired on every play/pause of the currently hooked `<video>` element. */
+    @JavascriptInterface
+    fun onVideoPlaybackState(isPlaying: Boolean) {
+        BrowserProbeBus.reportVideoPlaybackState(isPlaying)
+    }
 }

@@ -19,6 +19,10 @@ data class BrowserProbeState(
     // The acceptance signal for the ad-block script: counts rising means it's
     // actually stripping ad data, not just "I didn't happen to see an ad".
     val adBlockEvents: Map<String, Int> = emptyMap(),
+    // Play/pause state of the currently hooked <video> — lets BrowserScreen
+    // pause TransposePlayer's file playback the instant YouTube starts, so
+    // both audio sources are never audible at once.
+    val videoPlaying: Boolean = false,
 )
 
 object BrowserProbeBus {
@@ -43,6 +47,10 @@ object BrowserProbeBus {
         val counts = current.adBlockEvents.toMutableMap()
         counts[tag] = (counts[tag] ?: 0) + 1
         _state.value = current.copy(adBlockEvents = counts)
+    }
+
+    fun reportVideoPlaybackState(isPlaying: Boolean) {
+        _state.value = _state.value.copy(videoPlaying = isPlaying)
     }
 
     fun reset() {

@@ -1,11 +1,17 @@
 package com.realtimetranspose.ui
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.ContextWrapper
 import android.util.Base64
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -56,10 +62,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.realtimetranspose.BuildConfig
+import com.realtimetranspose.audio.TransposePlayer
 import com.realtimetranspose.browser.AD_BLOCK_SCRIPT
 import com.realtimetranspose.browser.BrowserProbeBus
 import com.realtimetranspose.browser.BrowserProbeState
@@ -175,6 +184,11 @@ private fun buildHookScript(engineSourceBase64: String): String = """
     setTempo: function(v) {
       window.__transposeLastTempo = v;
       if (window.__transposeVideo) window.__transposeVideo.playbackRate = v;
+    },
+    // Called from Kotlin when file playback starts, so only one of the two
+    // audio sources is ever audible at once.
+    pauseVideo: function() {
+      if (window.__transposeVideo) window.__transposeVideo.pause();
     }
   };
 
@@ -195,6 +209,22 @@ private fun buildHookScript(engineSourceBase64: String): String = """
     video.preservesPitch = true;
     window.__transposeVideo = video;
     video.playbackRate = window.__transposeLastTempo;
+
+    // Report play/pause of whichever video is active, once per element —
+    // this is what lets the Kotlin side pause the local-file player the
+    // instant a YouTube video starts, so the two never play at once.
+    if (!video.__transposePlaybackListenersAdded) {
+      video.__transposePlaybackListenersAdded = true;
+      video.addEventListener('play', function() {
+        window.TransposeBridge && window.TransposeBridge.onVideoPlaybackState && window.TransposeBridge.onVideoPlaybackState(true);
+      });
+      video.addEventListener('pause', function() {
+        window.TransposeBridge && window.TransposeBridge.onVideoPlaybackState && window.TransposeBridge.onVideoPlaybackState(false);
+      });
+      if (!video.paused) {
+        window.TransposeBridge && window.TransposeBridge.onVideoPlaybackState && window.TransposeBridge.onVideoPlaybackState(true);
+      }
+    }
 
     try {
       var ctx = window.__transposeCtx || (window.__transposeCtx = new (window.AudioContext || window.webkitAudioContext)());
@@ -324,13 +354,34 @@ private const val BROWSER_PITCH_MAX = 12f
 private const val BROWSER_TEMPO_MIN = 0.5f
 private const val BROWSER_TEMPO_MAX = 2f
 
+/** Compose's LocalContext is usually a ContextWrapper around the Activity, not the Activity itself. */
+private tailrec fun android.content.Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+/** Cinema-mode for fullscreen video — restored when the custom view is hidden. */
+private fun setSystemBarsHidden(activity: Activity?, hidden: Boolean) {
+    val window = activity?.window ?: return
+    val controller = WindowInsetsControllerCompat(window, window.decorView)
+    if (hidden) {
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+        controller.show(WindowInsetsCompat.Type.systemBars())
+    }
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserScreen() {
     val probeState by BrowserProbeBus.state.collectAsState()
+    val fileState by TransposePlayer.state.collectAsState()
     val context = LocalContext.current
 
     var pitchSemitones by remember { mutableFloatStateOf(0f) }
+    var fineCents by remember { mutableFloatStateOf(0f) }
     var tempo by remember { mutableFloatStateOf(1f) }
     var currentUrl by remember { mutableStateOf("m.youtube.com") }
     var diagnosticsExpanded by remember { mutableStateOf(false) }
@@ -353,6 +404,26 @@ fun BrowserScreen() {
     val navigate: (String) -> Unit = { input ->
         webViewRef?.loadUrl(resolveNavigationTarget(input))
         focusManager.clearFocus()
+    }
+
+    // Mutual exclusion between the two audio sources — both screens stay alive
+    // at once now (tab switching no longer disposes either), so without this
+    // a file and a YouTube video could both play audio simultaneously.
+    // Whichever one starts playing pauses the other; already-paused doesn't
+    // re-trigger, since both effects key off the *other* source's isPlaying
+    // and only act on true, so there's no feedback loop between them.
+    LaunchedEffect(fileState.isPlaying) {
+        if (fileState.isPlaying) {
+            webViewRef?.evaluateJavascript(
+                "window.TransposeControl && window.TransposeControl.pauseVideo && window.TransposeControl.pauseVideo();",
+                null,
+            )
+        }
+    }
+    LaunchedEffect(probeState.videoPlaying) {
+        if (probeState.videoPlaying) {
+            TransposePlayer.pause()
+        }
     }
 
     val engineSourceBase64 = remember {
@@ -408,6 +479,16 @@ fun BrowserScreen() {
                         resetEnabled = pitchSemitones != 0f,
                     )
                     BrowserSliderRow(
+                        label = "CENTS",
+                        fraction = ValueMapping.centsToFraction(fineCents),
+                        onFractionChange = { fineCents = ValueMapping.fractionToCents(it).toFloat() },
+                        valueText = formatSemitones(fineCents.roundToInt()),
+                        onDecrement = { fineCents = (fineCents.roundToInt() - 1).coerceAtLeast(-50).toFloat() },
+                        onIncrement = { fineCents = (fineCents.roundToInt() + 1).coerceAtMost(50).toFloat() },
+                        onReset = { fineCents = 0f },
+                        resetEnabled = fineCents != 0f,
+                    )
+                    BrowserSliderRow(
                         label = "TEMPO",
                         fraction = ValueMapping.speedToFraction(tempo, BROWSER_TEMPO_MIN, BROWSER_TEMPO_MAX),
                         onFractionChange = { tempo = ValueMapping.fractionToSpeed(it, BROWSER_TEMPO_MIN, BROWSER_TEMPO_MAX) },
@@ -425,10 +506,10 @@ fun BrowserScreen() {
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             StatusDot(color = hookStatusColor(probeState.hookResult))
-                            Text("Audio enganchado", style = NocturneType.diagnosticLabel, color = NocturneColors.textFaint)
+                            Text("Audio hooked", style = NocturneType.diagnosticLabel, color = NocturneColors.textFaint)
                         }
                         GhostTextButton(
-                            text = if (diagnosticsExpanded) "Ocultar" else "Diagnóstico",
+                            text = if (diagnosticsExpanded) "Hide" else "Diagnostics",
                             onClick = { diagnosticsExpanded = !diagnosticsExpanded },
                         )
                     }
@@ -441,16 +522,25 @@ fun BrowserScreen() {
         }
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NocturneColors.divider))
 
+        val activity = context.findActivity()
+
         AndroidView(
             modifier = Modifier.weight(1f).fillMaxWidth().background(NocturneColors.neutral900),
             factory = { ctx ->
                 if (BuildConfig.DEBUG) {
                     WebView.setWebContentsDebuggingEnabled(true)
                 }
-                WebView(ctx).apply {
+                val webView = WebView(ctx).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = true
+
+                    // Strips the "; wv" WebView marker Android appends by default.
+                    // YouTube (and other Google sites) detect that token and serve a
+                    // deliberately reduced experience to embedded WebViews — comments
+                    // in particular don't render at all with it present. The rest of
+                    // the UA (Chrome/WebView version) is left untouched.
+                    settings.userAgentString = settings.userAgentString?.replace("; wv", "")
 
                     // Kept as a defensive fallback for algorithmic darkening of any
                     // unstyled fragment — NOT what actually makes YouTube render dark.
@@ -530,15 +620,56 @@ fun BrowserScreen() {
                             return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                         }
                     }
+
+                    // YouTube's own fullscreen button requests the standard HTML5
+                    // Fullscreen API on the <video>; WebView doesn't do anything with
+                    // that on its own; it hands the enlarged view to onShowCustomView
+                    // for the app to place wherever makes sense — here, straight onto
+                    // the Activity's decor view so it covers the whole screen (tabs,
+                    // controls panel, everything), with system bars hidden to match.
+                    webChromeClient = object : WebChromeClient() {
+                        private var customView: View? = null
+                        private var customViewCallback: CustomViewCallback? = null
+
+                        override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                            val decorView = activity?.window?.decorView as? ViewGroup ?: return
+                            if (customView != null) {
+                                callback.onCustomViewHidden()
+                                return
+                            }
+                            customView = view
+                            customViewCallback = callback
+                            decorView.addView(
+                                view,
+                                ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+                            )
+                            setSystemBarsHidden(activity, true)
+                        }
+
+                        override fun onHideCustomView() {
+                            val decorView = activity?.window?.decorView as? ViewGroup ?: return
+                            customView?.let { decorView.removeView(it) }
+                            customView = null
+                            customViewCallback?.onCustomViewHidden()
+                            customViewCallback = null
+                            setSystemBarsHidden(activity, false)
+                        }
+                    }
+
                     loadUrl("https://m.youtube.com")
                 }.also { webViewRef = it }
+
+                FrameLayout(ctx).apply {
+                    addView(webView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                }
             },
-            update = { webView ->
-                webView.evaluateJavascript(
-                    "window.TransposeControl && window.TransposeControl.setPitchSemitones($pitchSemitones);",
+            update = {
+                val totalPitch = pitchSemitones + fineCents / 100f
+                webViewRef?.evaluateJavascript(
+                    "window.TransposeControl && window.TransposeControl.setPitchSemitones($totalPitch);",
                     null,
                 )
-                webView.evaluateJavascript(
+                webViewRef?.evaluateJavascript(
                     "window.TransposeControl && window.TransposeControl.setTempo($tempo);",
                     null,
                 )
@@ -652,10 +783,10 @@ private fun DiagnosticsPanel(probeState: BrowserProbeState) {
     ) {
         DiagnosticLine("Hook", probeState.hookResult ?: "—")
         DiagnosticLine(
-            "Nivel",
+            "Level",
             String.format(
                 Locale.US,
-                "%.4f (ctx=%s, muestras=%d)",
+                "%.4f (ctx=%s, samples=%d)",
                 probeState.lastLevel,
                 probeState.audioContextState ?: "-",
                 probeState.sampleCount,
@@ -664,7 +795,7 @@ private fun DiagnosticsPanel(probeState: BrowserProbeState) {
         DiagnosticLine(
             "AdBlock",
             if (probeState.adBlockEvents.isEmpty()) {
-                "sin eventos todavía"
+                "no events yet"
             } else {
                 probeState.adBlockEvents.entries.joinToString(", ") { (tag, count) -> "$tag×$count" }
             },
