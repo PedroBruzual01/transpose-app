@@ -112,10 +112,28 @@ private fun AppRoot(onPickFile: () -> Unit) {
             Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
                 NocturneHeader()
                 NocturneTabs(selectedIndex = tab, titles = titles, onSelect = { tab = it })
+                // Both screens stay composed at all times — a `when` that removes the
+                // inactive one from composition used to destroy Browser's WebView (and
+                // its remembered state) on every tab switch away, reloading YouTube
+                // from scratch and losing whatever was playing when the user came
+                // back. Browser is shifted off-screen via offset (not sized to zero)
+                // when inactive: a 0dp-sized WebView triggers a requestLayout loop on
+                // this device that starves Compose of its first frame (app never
+                // draws past the plain white window background). Offsetting keeps its
+                // measured size real and stable while removing it from both the
+                // visible area and the touch hit-test region, since Compose still
+                // draws Files (declared first) beneath it and it fully covers Files
+                // when active (declared second = on top), the same as the `when` did.
                 Box(modifier = Modifier.weight(1f)) {
-                    when (tab) {
-                        0 -> FilePlayerScreen(onPickFile = onPickFile)
-                        1 -> BrowserScreen()
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        FilePlayerScreen(onPickFile = onPickFile)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(if (tab == 1) Modifier else Modifier.offset(x = 3000.dp)),
+                    ) {
+                        BrowserScreen()
                     }
                 }
             }
