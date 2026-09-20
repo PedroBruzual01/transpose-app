@@ -1,9 +1,11 @@
 # Transpose
 
-A personal Android app for changing the **pitch** and **playback speed** of
-audio independently and in real time — on **(A) local audio files**, and
-**(B) YouTube videos** played inside a built-in browser. Personal project,
-not published on the Play Store.
+A personal Android app for musicians practicing by ear: change the **pitch**
+and **playback speed** of audio independently and in real time, on **(A)
+local audio files**, and **(B)** videos played inside a built-in browser.
+Personal project, not published on the Play Store, not affiliated with,
+endorsed by, or connected to YouTube, Google, or any other service it can
+load.
 
 <p align="center">
   <img src="docs/screenshots/files-loaded.png" width="260" alt="Files mode: pitch, fine tune and speed controls" />
@@ -26,27 +28,19 @@ not published on the Play Store.
 - **A/B loop**: mark two points in the track and loop between them
   indefinitely — useful for drilling a specific section on repeat.
 
-### Browser mode (YouTube)
+### Browser mode
 
-- A real address bar — type a URL, a bare domain, or a search phrase (falls
-  back to a Google search) — not a YouTube-only search box.
+- A built-in browser with a real address bar — type a URL, a bare domain,
+  or a search phrase (falls back to a Google search).
 - The same pitch (±12 semitones, ±50 cents fine-tune) and tempo (0.5×–2×)
-  controls as Files mode, applied live to whatever video is playing.
+  controls as Files mode, applied live to whatever video is playing, by
+  hooking the page's own `<video>` element into a Web Audio pitch-shift
+  graph — this works on YouTube specifically, since that's the ad-hoc test
+  suite it was built and verified against, but the hook itself just looks
+  for whatever `<video>` is active on the current page.
 - Tempo uses the browser's native `video.playbackRate`, which is
   pitch-preserving by default — so tempo and pitch are fully independent,
   the same as in Files mode.
-- **Ad-blocking**: rather than blocking by domain (YouTube serves its own
-  video ads from the same infrastructure as real video, specifically to
-  defeat that), the app intercepts YouTube's player-response JSON and
-  strips the ad-describing fields out of it before YouTube's own code reads
-  it — the same technique uBlock Origin uses internally. A DOM-based
-  fallback (auto-clicking the skip button, or hard-skipping) catches ads
-  stitched directly into the video stream, which no JSON-level block can
-  touch.
-- Forces YouTube's own dark theme, independent of the system theme.
-- Fixes a subtle YouTube-in-WebView bug where **comments never render**:
-  Android tags its WebViews with a `; wv` marker in the user-agent, and
-  Google sites quietly serve a reduced experience to it. Stripped.
 - **Full-screen video**, with the system status/navigation bars hidden to
   match, restored automatically on exit.
 - The pitch/tempo/URL panel is **collapsible** — swipe it away to let the
@@ -54,6 +48,14 @@ not published on the Play Store.
 - **Mutual exclusion**: playing a local file automatically pauses whatever
   is playing in the browser, and vice versa, so the two audio engines never
   overlap.
+- On YouTube specifically: forces its dark theme regardless of system
+  theme, and works around a WebView-detection quirk that otherwise hides
+  comments (Android tags WebViews with a `; wv` user-agent marker that
+  Google sites serve a reduced experience to — stripped here). It also
+  strips known ad-related fields out of the page's own player-response data
+  before the page reads it, plus a DOM-level fallback for ads stitched
+  directly into the video stream — both purely client-side, the same class
+  of thing a content-blocking browser extension does in its own tab.
 
 ## How it works
 
@@ -132,9 +134,12 @@ Requires the Android NDK (for the Rubber Band build) and a device or
 emulator running Android 8.0 (API 26) or newer. No API keys or backend of
 any kind — everything runs on-device.
 
-## License note
+## License
 
-Rubber Band Library is GPLv2+ (or commercial) licensed; it's vendored here
-under GPLv2+ terms, which is fine for this personal, non-distributed project
-but would need a commercial license to ship on the Play Store or otherwise
-distribute the app. `@soundtouchjs/core` is MPL-2.0.
+GPLv2 or later — see [LICENSE](LICENSE). This project statically links the
+[Rubber Band Library](https://breakfastquay.com/rubberband/) (GPLv2+,
+vendored in `app/src/main/cpp/rubberband/`), which is what determines that
+choice: a GPLv2+ dependency compiled into the app means the whole app has to
+be distributed under GPLv2+-compatible terms too, which is why the full
+source is here rather than just an APK. `@soundtouchjs/core`
+(`app/src/main/assets/`) is separately MPL-2.0 licensed.
