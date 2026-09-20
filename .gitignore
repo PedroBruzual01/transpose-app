@@ -13,3 +13,8 @@
 app/build/
 app/release/
 app/debug/
+
+# Release signing — the keystore itself lives outside the repo entirely
+# (C:\Users\Pedro Luis\keystores\), this file just points build.gradle.kts
+# at it and holds the store/key passwords. Never commit either.
+/keystore.properties
