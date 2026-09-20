@@ -19,6 +19,13 @@ object ValueMapping {
     fun fractionToSemitones(fraction: Float, min: Float = -12f, max: Float = 12f): Int =
         round(min + fraction.coerceIn(0f, 1f) * (max - min)).toInt()
 
+    /** Fine-tune offset, in cents (1/100 of a semitone), on top of the coarse semitone value. */
+    fun centsToFraction(cents: Float, min: Float = -50f, max: Float = 50f): Float =
+        ((cents - min) / (max - min)).coerceIn(0f, 1f)
+
+    fun fractionToCents(fraction: Float, min: Float = -50f, max: Float = 50f): Int =
+        round(min + fraction.coerceIn(0f, 1f) * (max - min)).toInt()
+
     fun speedToFraction(speed: Float, min: Float, max: Float): Float {
         val logMin = ln(min)
         val logMax = ln(max)

@@ -86,20 +86,20 @@ private fun EmptyFileScreen(state: PlayerState, onPickFile: () -> Unit) {
             Icon(Icons.Outlined.MusicNote, contentDescription = null, tint = NocturneColors.accent, modifier = Modifier.size(28.dp))
         }
         Spacer(Modifier.height(NocturneSpacing.blockGap))
-        Text("Sin archivo cargado", style = NocturneType.emptyTitle, color = NocturneColors.text)
+        Text("No file loaded", style = NocturneType.emptyTitle, color = NocturneColors.text)
         Spacer(Modifier.height(NocturneSpacing.blockInnerGap))
         Text(
-            "Elige un mp3, m4a, wav o flac del dispositivo para empezar a practicar.",
+            "Choose an mp3, m4a, wav or flac file from your device to start practicing.",
             style = NocturneType.body12_5,
             color = NocturneColors.textMuted,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
         Spacer(Modifier.height(NocturneSpacing.blockGap))
-        OutlinePrimaryButton(text = "Elegir archivo", onClick = onPickFile)
+        OutlinePrimaryButton(text = "Choose file", onClick = onPickFile)
 
         state.error?.let { error ->
             Spacer(Modifier.height(NocturneSpacing.blockGap))
-            ErrorCard(title = "No se pudo abrir el archivo", detail = error)
+            ErrorCard(title = "Couldn't open the file", detail = error)
         }
     }
 }
@@ -116,7 +116,7 @@ private fun LoadedFileScreen(state: PlayerState, onPickFile: () -> Unit) {
         FileCard(state = state, onPickFile = onPickFile)
 
         state.error?.let { error ->
-            ErrorCard(title = "Error de reproducción", detail = error)
+            ErrorCard(title = "Playback error", detail = error)
         }
 
         PlaybackBlock(state)
@@ -157,7 +157,7 @@ private fun FileCard(state: PlayerState, onPickFile: () -> Unit) {
             )
             Text(fileMetadata(state), style = NocturneType.metadata, color = NocturneColors.textMuted)
         }
-        GhostTextButton(text = "Cambiar", onClick = onPickFile)
+        GhostTextButton(text = "Change", onClick = onPickFile)
     }
 }
 
@@ -167,9 +167,9 @@ private fun fileMetadata(state: PlayerState): String {
     val khz = if (state.sampleRate > 0) "${state.sampleRate / 1000} kHz" else "-"
     val channels = when (state.channelCount) {
         1 -> "mono"
-        2 -> "estéreo"
+        2 -> "stereo"
         0 -> ""
-        else -> "${state.channelCount} canales"
+        else -> "${state.channelCount} channels"
     }
     return listOf(ext, duration, "$khz $channels".trim()).filter { it.isNotBlank() }.joinToString(" · ")
 }
@@ -246,13 +246,22 @@ private fun LoopBlock(state: PlayerState) {
 
 private fun loopStatusText(state: PlayerState): String = when {
     state.isLoopActive -> "${formatMs(state.loopStartMs!!)} → ${formatMs(state.loopEndMs!!)}"
-    state.loopStartMs != null -> "A=${formatMs(state.loopStartMs)} · falta B"
-    state.loopEndMs != null -> "B=${formatMs(state.loopEndMs)} · falta A"
-    else -> "desactivado"
+    state.loopStartMs != null -> "A=${formatMs(state.loopStartMs)} · missing B"
+    state.loopEndMs != null -> "B=${formatMs(state.loopEndMs)} · missing A"
+    else -> "off"
 }
 
 @Composable
 private fun PitchBlock(state: PlayerState) {
+    // state.pitchSemitones is the single total sent straight to Rubber Band
+    // (it accepts fractional semitones natively, see PitchShiftEngine) — the
+    // coarse semitone step and the fine cents offset below are just two
+    // different-sized controls over the same value, decomposed via
+    // truncation so e.g. -3.05 reads as coarse -3 / fine -5 cents, matching
+    // how they'd recombine (coarse + fineCents / 100f).
+    val coarse = state.pitchSemitones.toInt()
+    val fineCents = ((state.pitchSemitones - coarse) * 100).roundToInt()
+
     Column(verticalArrangement = Arrangement.spacedBy(NocturneSpacing.blockInnerGap)) {
         SectionLabel(
             text = "Pitch",
@@ -260,28 +269,58 @@ private fun PitchBlock(state: PlayerState) {
                 GhostTextButton(text = "Reset", onClick = { TransposePlayer.setPitchSemitones(0f) }, enabled = state.pitchSemitones != 0f)
             },
         )
-        val semitones = state.pitchSemitones.roundToInt()
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             CircleIconButton(
                 icon = Icons.Outlined.Remove,
-                onClick = { TransposePlayer.setPitchSemitones((semitones - 1).coerceAtLeast(-12).toFloat()) },
-                enabled = semitones > -12,
+                onClick = { TransposePlayer.setPitchSemitones((coarse - 1).coerceAtLeast(-12) + fineCents / 100f) },
+                enabled = coarse > -12,
                 contentDescription = "Pitch down",
             )
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(formatSemitones(semitones), style = NocturneType.valueDisplay, color = NocturneColors.text)
-                Text("semitonos", style = NocturneType.metadata, color = NocturneColors.textMuted)
+                Text(formatSigned(coarse), style = NocturneType.valueDisplay, color = NocturneColors.text)
+                Text("semitones", style = NocturneType.metadata, color = NocturneColors.textMuted)
             }
             CircleIconButton(
                 icon = Icons.Outlined.Add,
-                onClick = { TransposePlayer.setPitchSemitones((semitones + 1).coerceAtMost(12).toFloat()) },
-                enabled = semitones < 12,
+                onClick = { TransposePlayer.setPitchSemitones((coarse + 1).coerceAtMost(12) + fineCents / 100f) },
+                enabled = coarse < 12,
                 contentDescription = "Pitch up",
             )
         }
         CenteredValueSlider(
             fraction = ValueMapping.semitonesToFraction(state.pitchSemitones),
-            onFractionChange = { TransposePlayer.setPitchSemitones(ValueMapping.fractionToSemitones(it).toFloat()) },
+            onFractionChange = { TransposePlayer.setPitchSemitones(ValueMapping.fractionToSemitones(it) + fineCents / 100f) },
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(NocturneSpacing.blockInnerGap)) {
+        SectionLabel(
+            text = "Fine tune",
+            trailing = {
+                GhostTextButton(text = "Reset", onClick = { TransposePlayer.setPitchSemitones(coarse.toFloat()) }, enabled = fineCents != 0)
+            },
+        )
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            CircleIconButton(
+                icon = Icons.Outlined.Remove,
+                onClick = { TransposePlayer.setPitchSemitones(coarse + (fineCents - 1).coerceAtLeast(-50) / 100f) },
+                enabled = fineCents > -50,
+                contentDescription = "Fine tune down",
+            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(formatSigned(fineCents), style = NocturneType.valueDisplay, color = NocturneColors.text)
+                Text("cents", style = NocturneType.metadata, color = NocturneColors.textMuted)
+            }
+            CircleIconButton(
+                icon = Icons.Outlined.Add,
+                onClick = { TransposePlayer.setPitchSemitones(coarse + (fineCents + 1).coerceAtMost(50) / 100f) },
+                enabled = fineCents < 50,
+                contentDescription = "Fine tune up",
+            )
+        }
+        CenteredValueSlider(
+            fraction = ValueMapping.centsToFraction(fineCents.toFloat()),
+            onFractionChange = { TransposePlayer.setPitchSemitones(coarse + ValueMapping.fractionToCents(it) / 100f) },
         )
     }
 }
@@ -333,7 +372,7 @@ private fun OutlinePrimaryButton(text: String, onClick: () -> Unit) {
     }
 }
 
-private fun formatSemitones(value: Int): String = if (value > 0) "+$value" else value.toString()
+private fun formatSigned(value: Int): String = if (value > 0) "+$value" else value.toString()
 
 private fun formatMs(ms: Long): String {
     val totalSeconds = ms / 1000
