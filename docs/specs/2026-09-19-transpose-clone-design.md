@@ -73,6 +73,7 @@ namespace `com.realtimetranspose`, NDK/CMake toolchain validado.
 - [x] Pipeline de decodificación de archivo + AudioTrack (`TransposePlayer`)
 - [x] UI modo archivo (`FilePlayerScreen`) — **probado en Poco F7 Pro real, funciona** (FLAC, pitch -3, sin errores)
 - [x] Loop A-B (Modo A) — probado en dispositivo real, funciona
+- [x] Rediseño visual "Nocturne" (ambas pantallas) — ver `docs/design/design_handoff_transpose_ui/`, probado en dispositivo real
 - [x] Fase 0 de investigación del modo navegador — **CONFIRMADO: funciona** (ver más abajo)
 - [x] Motor de pitch real en el navegador — **probado en dispositivo real, funciona.** Ver "Cambio de motor" más abajo: `@soundtouchjs/audio-worklet` (AudioWorkletNode) quedó descartado por CSP; sustituido por `@soundtouchjs/core` sobre `ScriptProcessorNode`, bundleado a mano con esbuild
 - [x] Velocidad/tempo en el navegador vía `video.playbackRate` nativo (preserva tono por defecto) — independiente del pitch

@@ -17,6 +17,8 @@ data class PlayerState(
     val pitchSemitones: Float = 0f,
     val speed: Float = 1f,
     val fileName: String? = null,
+    val sampleRate: Int = 0,
+    val channelCount: Int = 0,
     val error: String? = null,
     val loopStartMs: Long? = null,
     val loopEndMs: Long? = null,
@@ -182,6 +184,8 @@ object TransposePlayer {
         _state.value = _state.value.copy(
             isLoaded = true,
             durationMs = decoder.durationUs / 1000,
+            sampleRate = decoder.sampleRate,
+            channelCount = decoder.channelCount,
         )
 
         val channels = decoder.channelCount

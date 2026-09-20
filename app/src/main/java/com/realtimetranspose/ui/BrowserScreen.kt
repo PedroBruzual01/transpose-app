@@ -6,25 +6,41 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Remove
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewCompat
@@ -32,10 +48,21 @@ import androidx.webkit.WebViewFeature
 import com.realtimetranspose.BuildConfig
 import com.realtimetranspose.browser.AD_BLOCK_SCRIPT
 import com.realtimetranspose.browser.BrowserProbeBus
+import com.realtimetranspose.browser.BrowserProbeState
 import com.realtimetranspose.browser.DOM_FALLBACK_SCRIPT
 import com.realtimetranspose.browser.TransposeJsBridge
+import com.realtimetranspose.ui.components.CenteredValueSlider
+import com.realtimetranspose.ui.components.CircleIconButton
+import com.realtimetranspose.ui.components.GhostIconButton
+import com.realtimetranspose.ui.components.GhostTextButton
+import com.realtimetranspose.ui.components.StatusDot
+import com.realtimetranspose.ui.components.ValueMapping
+import com.realtimetranspose.ui.theme.NocturneColors
+import com.realtimetranspose.ui.theme.NocturneSpacing
+import com.realtimetranspose.ui.theme.NocturneType
 import java.io.ByteArrayInputStream
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Phase B (browser mode): hooks YouTube's own `<video>` element into a real
@@ -253,6 +280,11 @@ private fun shouldBlockNetworkRequest(url: String): Boolean {
     return false
 }
 
+private const val BROWSER_PITCH_MIN = -12f
+private const val BROWSER_PITCH_MAX = 12f
+private const val BROWSER_TEMPO_MIN = 0.5f
+private const val BROWSER_TEMPO_MAX = 2f
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserScreen() {
@@ -261,6 +293,8 @@ fun BrowserScreen() {
 
     var pitchSemitones by remember { mutableFloatStateOf(0f) }
     var tempo by remember { mutableFloatStateOf(1f) }
+    var currentUrl by remember { mutableStateOf("m.youtube.com") }
+    var diagnosticsExpanded by remember { mutableStateOf(false) }
 
     val engineSourceBase64 = remember {
         val bytes = context.assets.open("soundtouch-scriptprocessor.js").use { it.readBytes() }
@@ -268,57 +302,59 @@ fun BrowserScreen() {
     }
     val hookScript = remember(engineSourceBase64) { buildHookScript(engineSourceBase64) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text("Hook: ${probeState.hookResult ?: "—"}", style = MaterialTheme.typography.bodySmall)
-            Text(
-                String.format(
-                    Locale.US,
-                    "Nivel: %.4f (ctx=%s, muestras=%d)",
-                    probeState.lastLevel,
-                    probeState.audioContextState ?: "-",
-                    probeState.sampleCount,
-                ),
-                style = MaterialTheme.typography.bodySmall,
+    Column(modifier = Modifier.fillMaxSize().background(NocturneColors.bg)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp, start = 16.dp, end = 16.dp, bottom = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            BrowserSliderRow(
+                label = "PITCH",
+                fraction = ValueMapping.semitonesToFraction(pitchSemitones, BROWSER_PITCH_MIN, BROWSER_PITCH_MAX),
+                onFractionChange = { pitchSemitones = ValueMapping.fractionToSemitones(it, BROWSER_PITCH_MIN, BROWSER_PITCH_MAX).toFloat() },
+                valueText = formatSemitones(pitchSemitones.roundToInt()),
+                onDecrement = { pitchSemitones = (pitchSemitones.roundToInt() - 1).coerceAtLeast(BROWSER_PITCH_MIN.toInt()).toFloat() },
+                onIncrement = { pitchSemitones = (pitchSemitones.roundToInt() + 1).coerceAtMost(BROWSER_PITCH_MAX.toInt()).toFloat() },
+                onReset = { pitchSemitones = 0f },
+                resetEnabled = pitchSemitones != 0f,
             )
-            Text(
-                if (probeState.adBlockEvents.isEmpty()) {
-                    "AdBlock: sin eventos todavía"
-                } else {
-                    "AdBlock: " + probeState.adBlockEvents.entries.joinToString(", ") { (tag, count) -> "$tag×$count" }
-                },
-                style = MaterialTheme.typography.bodySmall,
-            )
-
-            Text("Pitch: ${formatSemitones(pitchSemitones)}", style = MaterialTheme.typography.bodySmall)
-            Slider(
-                value = pitchSemitones,
-                valueRange = -12f..12f,
-                steps = 23,
-                onValueChange = { pitchSemitones = it },
-            )
-
-            Text(
-                String.format(Locale.US, "Tempo: %.2fx", tempo),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Slider(
-                value = tempo,
-                valueRange = 0.5f..2f,
-                onValueChange = { tempo = it },
+            BrowserSliderRow(
+                label = "TEMPO",
+                fraction = ValueMapping.speedToFraction(tempo, BROWSER_TEMPO_MIN, BROWSER_TEMPO_MAX),
+                onFractionChange = { tempo = ValueMapping.fractionToSpeed(it, BROWSER_TEMPO_MIN, BROWSER_TEMPO_MAX) },
+                valueText = String.format(Locale.US, "%.2f×", tempo),
+                onDecrement = { tempo = (tempo - 0.05f).coerceAtLeast(BROWSER_TEMPO_MIN) },
+                onIncrement = { tempo = (tempo + 0.05f).coerceAtMost(BROWSER_TEMPO_MAX) },
+                onReset = { tempo = 1f },
+                resetEnabled = tempo != 1f,
             )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Button(onClick = { pitchSemitones = 0f }) { Text("Reset pitch") }
-                Button(onClick = { tempo = 1f }) { Text("Reset tempo") }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    StatusDot(color = hookStatusColor(probeState.hookResult))
+                    Text("Audio enganchado", style = NocturneType.diagnosticLabel, color = NocturneColors.textFaint)
+                }
+                GhostTextButton(
+                    text = if (diagnosticsExpanded) "Ocultar" else "Diagnóstico",
+                    onClick = { diagnosticsExpanded = !diagnosticsExpanded },
+                )
+            }
+
+            if (diagnosticsExpanded) {
+                DiagnosticsPanel(probeState)
             }
         }
-        HorizontalDivider()
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NocturneColors.divider))
+
+        UrlBar(currentUrl)
+
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().background(NocturneColors.neutral900),
             factory = { ctx ->
                 if (BuildConfig.DEBUG) {
                     WebView.setWebContentsDebuggingEnabled(true)
@@ -344,6 +380,7 @@ fun BrowserScreen() {
                     addJavascriptInterface(TransposeJsBridge(), "TransposeBridge")
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView, url: String?) {
+                            currentUrl = url ?: currentUrl
                             // Fallback path for WebViews without document-start support
                             // (older WebView versions) — late, but better than nothing.
                             if (!supportsDocumentStart) {
@@ -384,7 +421,111 @@ fun BrowserScreen() {
     }
 }
 
-private fun formatSemitones(value: Float): String {
-    val rounded = Math.round(value)
-    return if (rounded > 0) "+$rounded" else rounded.toString()
+@Composable
+private fun BrowserSliderRow(
+    label: String,
+    fraction: Float,
+    onFractionChange: (Float) -> Unit,
+    valueText: String,
+    onDecrement: () -> Unit,
+    onIncrement: () -> Unit,
+    onReset: () -> Unit,
+    resetEnabled: Boolean,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, style = NocturneType.sectionLabel, color = NocturneColors.textFaint, modifier = Modifier.width(52.dp))
+        CenteredValueSlider(
+            fraction = fraction,
+            onFractionChange = onFractionChange,
+            modifier = Modifier.weight(1f),
+            trackHeight = 24.dp,
+            thumbDiameter = 12.dp,
+            glow = false,
+        )
+        CircleIconButton(icon = Icons.Outlined.Remove, onClick = onDecrement, diameter = 28.dp, iconSize = 14.dp, contentDescription = "$label down")
+        Box(modifier = Modifier.width(40.dp), contentAlignment = Alignment.Center) {
+            Text(
+                valueText,
+                style = NocturneType.browserValueMono,
+                color = NocturneColors.accent300,
+                softWrap = false,
+                maxLines = 1,
+            )
+        }
+        CircleIconButton(icon = Icons.Outlined.Add, onClick = onIncrement, diameter = 28.dp, iconSize = 14.dp, contentDescription = "$label up")
+        GhostIconButton(icon = Icons.Outlined.Refresh, onClick = onReset, enabled = resetEnabled, contentDescription = "Reset $label")
+    }
 }
+
+@Composable
+private fun UrlBar(url: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(NocturneColors.neutral900)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(Icons.Outlined.Public, contentDescription = null, tint = NocturneColors.accent, modifier = Modifier.size(13.dp))
+        Text(
+            url,
+            style = NocturneType.metadata,
+            color = NocturneColors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NocturneColors.divider))
+}
+
+@Composable
+private fun DiagnosticsPanel(probeState: BrowserProbeState) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(NocturneColors.surface, RoundedCornerShape(NocturneSpacing.radiusMd))
+            .border(1.dp, NocturneColors.divider, RoundedCornerShape(NocturneSpacing.radiusMd))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        DiagnosticLine("Hook", probeState.hookResult ?: "—")
+        DiagnosticLine(
+            "Nivel",
+            String.format(
+                Locale.US,
+                "%.4f (ctx=%s, muestras=%d)",
+                probeState.lastLevel,
+                probeState.audioContextState ?: "-",
+                probeState.sampleCount,
+            ),
+        )
+        DiagnosticLine(
+            "AdBlock",
+            if (probeState.adBlockEvents.isEmpty()) {
+                "sin eventos todavía"
+            } else {
+                probeState.adBlockEvents.entries.joinToString(", ") { (tag, count) -> "$tag×$count" }
+            },
+        )
+    }
+}
+
+@Composable
+private fun DiagnosticLine(label: String, value: String) {
+    Text(
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = NocturneColors.textMuted)) { append("$label: ") }
+            withStyle(SpanStyle(color = NocturneColors.accent300)) { append(value) }
+        },
+        style = NocturneType.diagnosticMono,
+    )
+}
+
+private fun hookStatusColor(hookResult: String?): Color = when {
+    hookResult == null -> NocturneColors.textMuted
+    hookResult.startsWith("OK") -> NocturneColors.accent
+    else -> NocturneColors.errorText
+}
+
+private fun formatSemitones(value: Int): String = if (value > 0) "+$value" else value.toString()

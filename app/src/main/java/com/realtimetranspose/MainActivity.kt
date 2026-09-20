@@ -7,24 +7,38 @@ import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.realtimetranspose.audio.TransposePlayer
 import com.realtimetranspose.ui.BrowserScreen
 import com.realtimetranspose.ui.FilePlayerScreen
+import com.realtimetranspose.ui.theme.NocturneColors
+import com.realtimetranspose.ui.theme.NocturneMaterialColorScheme
+import com.realtimetranspose.ui.theme.NocturneType
 
 class MainActivity : ComponentActivity() {
 
@@ -67,29 +81,80 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Tab shell: Files (Modo A, working) / Browser (Modo B, Fase 0 spike screen). */
+/**
+ * Tab shell — see docs/design/design_handoff_transpose_ui/README.md
+ * "Cabecera (común)". Tab selection and the Browser tab's whole WebView
+ * state must survive rotation (MainActivity handles config changes itself,
+ * see AndroidManifest.xml); rememberSaveable is defense-in-depth for
+ * process death, where that doesn't help.
+ */
 @Composable
 private fun AppRoot(onPickFile: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val titles = listOf("Files", "Browser")
 
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-            TabRow(selectedTabIndex = tab) {
-                titles.forEachIndexed { index, title ->
-                    Tab(
-                        selected = tab == index,
-                        onClick = { tab = index },
-                        text = { Text(title) },
-                    )
-                }
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                when (tab) {
-                    0 -> FilePlayerScreen(onPickFile = onPickFile)
-                    1 -> BrowserScreen()
+    MaterialTheme(colorScheme = NocturneMaterialColorScheme) {
+        Surface(modifier = Modifier.fillMaxSize(), color = NocturneColors.bg) {
+            Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
+                NocturneHeader()
+                NocturneTabs(selectedIndex = tab, titles = titles, onSelect = { tab = it })
+                Box(modifier = Modifier.weight(1f)) {
+                    when (tab) {
+                        0 -> FilePlayerScreen(onPickFile = onPickFile)
+                        1 -> BrowserScreen()
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NocturneHeader() {
+    Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp, start = 16.dp, end = 16.dp)) {
+        Text("TRANSPOSE", style = NocturneType.wordmark, color = NocturneColors.textMuted)
+    }
+}
+
+@Composable
+private fun NocturneTabs(selectedIndex: Int, titles: List<String>, onSelect: (Int) -> Unit) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        val tabWidth = maxWidth / titles.size
+        val indicatorOffset by animateDpAsState(
+            targetValue = tabWidth * selectedIndex,
+            animationSpec = tween(200),
+            label = "tabIndicator",
+        )
+
+        Column {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                titles.forEachIndexed { index, title ->
+                    val selected = index == selectedIndex
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .clickable { onSelect(index) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            title,
+                            style = NocturneType.body13,
+                            color = if (selected) NocturneColors.accent else NocturneColors.textMuted,
+                        )
+                    }
+                }
+            }
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NocturneColors.divider))
+        }
+
+        Box(
+            modifier = Modifier
+                .offset(x = indicatorOffset)
+                .width(tabWidth)
+                .height(2.dp)
+                .align(Alignment.BottomStart)
+                .background(NocturneColors.accent),
+        )
     }
 }
