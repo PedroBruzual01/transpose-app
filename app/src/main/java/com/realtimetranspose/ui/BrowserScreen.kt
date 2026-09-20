@@ -6,8 +6,14 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,14 +25,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Remove
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -35,14 +45,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.realtimetranspose.BuildConfig
@@ -61,6 +75,7 @@ import com.realtimetranspose.ui.theme.NocturneColors
 import com.realtimetranspose.ui.theme.NocturneSpacing
 import com.realtimetranspose.ui.theme.NocturneType
 import java.io.ByteArrayInputStream
+import java.net.URLEncoder
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -95,6 +110,30 @@ import kotlin.math.roundToInt
  * called through WebView.evaluateJavascript() from [BrowserScreen]'s
  * `AndroidView` update block.
  */
+
+/**
+ * Forces YouTube's own dark theme via its `PREF` cookie (`f6=400`) — a
+ * well-documented, widely-used technique (e.g.
+ * https://gist.github.com/RoguedBear/56758693577fa324b1556e94d68ac6d3).
+ * Needed because YouTube's dark theme is NOT purely CSS `prefers-color-scheme`
+ * driven — it's gated by this stored preference — and neither
+ * `WebSettingsCompat.setForceDark()` nor an app-level Configuration/night-mode
+ * override changed `window.matchMedia('(prefers-color-scheme: dark)')` at all
+ * in on-device testing (confirmed false in both cases, even with the phone's
+ * own system dark theme on), so those Android-side dark-mode APIs aren't
+ * reliably wired to this WebView's rendering on this OS version. Setting the
+ * cookie directly sidesteps all of that.
+ */
+private val YOUTUBE_DARK_MODE_SCRIPT = """
+(function() {
+  if (window.__transposeDarkModeSet) return;
+  window.__transposeDarkModeSet = true;
+  try {
+    document.cookie = 'PREF=tz=UTC&f6=400; path=/; domain=.youtube.com; max-age=31536000';
+  } catch (e) {}
+})();
+""".trimIndent()
+
 private fun buildHookScript(engineSourceBase64: String): String = """
 (function() {
   if (window.__transposeHooked) return;
@@ -295,6 +334,26 @@ fun BrowserScreen() {
     var tempo by remember { mutableFloatStateOf(1f) }
     var currentUrl by remember { mutableStateOf("m.youtube.com") }
     var diagnosticsExpanded by remember { mutableStateOf(false) }
+    // Collapsible so YouTube can take the full screen when the user isn't
+    // actively adjusting pitch/tempo — starts expanded to match prior
+    // behavior, user collapses it on demand via the grabber handle below.
+    var controlsExpanded by remember { mutableStateOf(true) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    // Editable copy of currentUrl — kept separate so typing doesn't fight
+    // with onPageFinished updates, and only resynced from the real URL while
+    // the field isn't focused (otherwise every navigation would blow away
+    // whatever the user is mid-typing).
+    var urlInputText by remember { mutableStateOf(currentUrl) }
+    var urlFieldFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(currentUrl) {
+        if (!urlFieldFocused) urlInputText = currentUrl
+    }
+    val focusManager = LocalFocusManager.current
+    val navigate: (String) -> Unit = { input ->
+        webViewRef?.loadUrl(resolveNavigationTarget(input))
+        focusManager.clearFocus()
+    }
 
     val engineSourceBase64 = remember {
         val bytes = context.assets.open("soundtouch-scriptprocessor.js").use { it.readBytes() }
@@ -306,55 +365,84 @@ fun BrowserScreen() {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 12.dp, start = 16.dp, end = 16.dp, bottom = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(top = 6.dp, start = 16.dp, end = 16.dp, bottom = if (controlsExpanded) 14.dp else 6.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            BrowserSliderRow(
-                label = "PITCH",
-                fraction = ValueMapping.semitonesToFraction(pitchSemitones, BROWSER_PITCH_MIN, BROWSER_PITCH_MAX),
-                onFractionChange = { pitchSemitones = ValueMapping.fractionToSemitones(it, BROWSER_PITCH_MIN, BROWSER_PITCH_MAX).toFloat() },
-                valueText = formatSemitones(pitchSemitones.roundToInt()),
-                onDecrement = { pitchSemitones = (pitchSemitones.roundToInt() - 1).coerceAtLeast(BROWSER_PITCH_MIN.toInt()).toFloat() },
-                onIncrement = { pitchSemitones = (pitchSemitones.roundToInt() + 1).coerceAtMost(BROWSER_PITCH_MAX.toInt()).toFloat() },
-                onReset = { pitchSemitones = 0f },
-                resetEnabled = pitchSemitones != 0f,
-            )
-            BrowserSliderRow(
-                label = "TEMPO",
-                fraction = ValueMapping.speedToFraction(tempo, BROWSER_TEMPO_MIN, BROWSER_TEMPO_MAX),
-                onFractionChange = { tempo = ValueMapping.fractionToSpeed(it, BROWSER_TEMPO_MIN, BROWSER_TEMPO_MAX) },
-                valueText = String.format(Locale.US, "%.2f×", tempo),
-                onDecrement = { tempo = (tempo - 0.05f).coerceAtLeast(BROWSER_TEMPO_MIN) },
-                onIncrement = { tempo = (tempo + 0.05f).coerceAtMost(BROWSER_TEMPO_MAX) },
-                onReset = { tempo = 1f },
-                resetEnabled = tempo != 1f,
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            // Minimal always-visible handle: a plain grabber bar, no label —
+            // tap anywhere on it to expand/collapse the panel below, so
+            // YouTube can take the freed-up space when collapsed.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { controlsExpanded = !controlsExpanded }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    StatusDot(color = hookStatusColor(probeState.hookResult))
-                    Text("Audio enganchado", style = NocturneType.diagnosticLabel, color = NocturneColors.textFaint)
-                }
-                GhostTextButton(
-                    text = if (diagnosticsExpanded) "Ocultar" else "Diagnóstico",
-                    onClick = { diagnosticsExpanded = !diagnosticsExpanded },
+                Box(
+                    modifier = Modifier
+                        .size(width = 32.dp, height = 3.dp)
+                        .background(NocturneColors.divider, RoundedCornerShape(2.dp)),
                 )
             }
 
-            if (diagnosticsExpanded) {
-                DiagnosticsPanel(probeState)
+            AnimatedVisibility(
+                visible = controlsExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    UrlSearchBar(
+                        value = urlInputText,
+                        onValueChange = { urlInputText = it },
+                        onSubmit = { navigate(urlInputText) },
+                        onFocusChanged = { urlFieldFocused = it },
+                    )
+                    BrowserSliderRow(
+                        label = "PITCH",
+                        fraction = ValueMapping.semitonesToFraction(pitchSemitones, BROWSER_PITCH_MIN, BROWSER_PITCH_MAX),
+                        onFractionChange = { pitchSemitones = ValueMapping.fractionToSemitones(it, BROWSER_PITCH_MIN, BROWSER_PITCH_MAX).toFloat() },
+                        valueText = formatSemitones(pitchSemitones.roundToInt()),
+                        onDecrement = { pitchSemitones = (pitchSemitones.roundToInt() - 1).coerceAtLeast(BROWSER_PITCH_MIN.toInt()).toFloat() },
+                        onIncrement = { pitchSemitones = (pitchSemitones.roundToInt() + 1).coerceAtMost(BROWSER_PITCH_MAX.toInt()).toFloat() },
+                        onReset = { pitchSemitones = 0f },
+                        resetEnabled = pitchSemitones != 0f,
+                    )
+                    BrowserSliderRow(
+                        label = "TEMPO",
+                        fraction = ValueMapping.speedToFraction(tempo, BROWSER_TEMPO_MIN, BROWSER_TEMPO_MAX),
+                        onFractionChange = { tempo = ValueMapping.fractionToSpeed(it, BROWSER_TEMPO_MIN, BROWSER_TEMPO_MAX) },
+                        valueText = String.format(Locale.US, "%.2f×", tempo),
+                        onDecrement = { tempo = (tempo - 0.05f).coerceAtLeast(BROWSER_TEMPO_MIN) },
+                        onIncrement = { tempo = (tempo + 0.05f).coerceAtMost(BROWSER_TEMPO_MAX) },
+                        onReset = { tempo = 1f },
+                        resetEnabled = tempo != 1f,
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            StatusDot(color = hookStatusColor(probeState.hookResult))
+                            Text("Audio enganchado", style = NocturneType.diagnosticLabel, color = NocturneColors.textFaint)
+                        }
+                        GhostTextButton(
+                            text = if (diagnosticsExpanded) "Ocultar" else "Diagnóstico",
+                            onClick = { diagnosticsExpanded = !diagnosticsExpanded },
+                        )
+                    }
+
+                    if (diagnosticsExpanded) {
+                        DiagnosticsPanel(probeState)
+                    }
+                }
             }
         }
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NocturneColors.divider))
 
-        UrlBar(currentUrl)
-
         AndroidView(
-            modifier = Modifier.fillMaxSize().background(NocturneColors.neutral900),
+            modifier = Modifier.weight(1f).fillMaxWidth().background(NocturneColors.neutral900),
             factory = { ctx ->
                 if (BuildConfig.DEBUG) {
                     WebView.setWebContentsDebuggingEnabled(true)
@@ -364,14 +452,49 @@ fun BrowserScreen() {
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = true
 
-                    val origins = setOf("https://m.youtube.com")
+                    // Kept as a defensive fallback for algorithmic darkening of any
+                    // unstyled fragment — NOT what actually makes YouTube render dark.
+                    // Measured empirically: window.matchMedia('(prefers-color-scheme:
+                    // dark)').matches stayed false with these set, with a per-instance
+                    // ConfigurationContext, and with an app-level night-mode override —
+                    // this WebView isn't wired to any of those for that media query on
+                    // this OS version. What actually works is YOUTUBE_DARK_MODE_SCRIPT
+                    // below: YouTube's dark theme is gated by its own stored `PREF`
+                    // cookie preference, not purely by prefers-color-scheme.
+                    @Suppress("DEPRECATION")
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
+                        WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_ON)
+                    }
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK_STRATEGY)) {
+                        // YouTube has a real dark theme behind prefers-color-scheme —
+                        // prefer that over Chromium's own simulated/inverted darkening.
+                        WebSettingsCompat.setForceDarkStrategy(
+                            settings,
+                            WebSettingsCompat.DARK_STRATEGY_PREFER_WEB_THEME_OVER_USER_AGENT_DARKENING,
+                        )
+                    }
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+                        WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true)
+                    }
+
+                    // "*" (all origins), not just m.youtube.com — the URL bar is a real
+                    // address bar now (any site, plus other YouTube subdomains like
+                    // music.youtube.com), so these must run everywhere to still work
+                    // after navigating away. Safe to run unconditionally: the ad-block
+                    // script only ever matches YouTube-specific JSON keys/DOM selectors
+                    // and no-ops elsewhere, the dark-mode cookie targets domain
+                    // .youtube.com specifically (browsers silently refuse to set a
+                    // cookie for any other domain), and the pitch hook just looks for
+                    // whatever <video> element is active on the current page.
+                    val origins = setOf("*")
                     val supportsDocumentStart =
                         WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
                     if (supportsDocumentStart) {
-                        // Ad-block must run before the hook script: both patch the
-                        // page, but the ad-block hooks (JSON.parse etc.) need to be
-                        // in place before YouTube's own bootstrap script runs, and
-                        // registration order is injection order.
+                        // Dark-mode cookie first: it must be set before YouTube's own
+                        // bootstrap script reads it to decide which theme to render.
+                        // Ad-block after that (also before YouTube's bootstrap, for the
+                        // same reason), hook script last.
+                        WebViewCompat.addDocumentStartJavaScript(this, YOUTUBE_DARK_MODE_SCRIPT, origins)
                         WebViewCompat.addDocumentStartJavaScript(this, AD_BLOCK_SCRIPT, origins)
                         WebViewCompat.addDocumentStartJavaScript(this, DOM_FALLBACK_SCRIPT, origins)
                         WebViewCompat.addDocumentStartJavaScript(this, hookScript, origins)
@@ -383,7 +506,10 @@ fun BrowserScreen() {
                             currentUrl = url ?: currentUrl
                             // Fallback path for WebViews without document-start support
                             // (older WebView versions) — late, but better than nothing.
+                            // The dark-mode cookie in particular only takes effect on the
+                            // *next* navigation here, since this page already rendered.
                             if (!supportsDocumentStart) {
+                                view.evaluateJavascript(YOUTUBE_DARK_MODE_SCRIPT, null)
                                 view.evaluateJavascript(AD_BLOCK_SCRIPT, null)
                                 view.evaluateJavascript(DOM_FALLBACK_SCRIPT, null)
                                 view.evaluateJavascript(hookScript, null)
@@ -405,7 +531,7 @@ fun BrowserScreen() {
                         }
                     }
                     loadUrl("https://m.youtube.com")
-                }
+                }.also { webViewRef = it }
             },
             update = { webView ->
                 webView.evaluateJavascript(
@@ -457,26 +583,61 @@ private fun BrowserSliderRow(
     }
 }
 
+/**
+ * Editable, inside the collapsible controls panel (not fixed above the
+ * WebView) — lets the user both see and change the current page: type a
+ * full URL, a bare domain, or a search phrase, then hit the keyboard's Go
+ * action. [resolveNavigationTarget] decides which of those it is.
+ */
 @Composable
-private fun UrlBar(url: String) {
+private fun UrlSearchBar(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(NocturneColors.neutral900)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .background(NocturneColors.neutral900, RoundedCornerShape(NocturneSpacing.radiusMd))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(Icons.Outlined.Public, contentDescription = null, tint = NocturneColors.accent, modifier = Modifier.size(13.dp))
-        Text(
-            url,
-            style = NocturneType.metadata,
-            color = NocturneColors.textMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        Icon(Icons.Outlined.Search, contentDescription = null, tint = NocturneColors.textFaint, modifier = Modifier.size(13.dp))
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .weight(1f)
+                .onFocusChanged { onFocusChanged(it.isFocused) },
+            textStyle = NocturneType.metadata.copy(color = NocturneColors.text),
+            singleLine = true,
+            cursorBrush = SolidColor(NocturneColors.accent),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { onSubmit() }),
         )
     }
-    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(NocturneColors.divider))
+}
+
+/**
+ * Regular-browser-address-bar semantics, not a YouTube-only search box: a
+ * full URL is used as-is, a bare domain-looking string (no spaces, has a
+ * dot) gets `https://` prepended, and anything else is a general Google
+ * search — so this can navigate to any site, the same as Chrome's omnibox,
+ * not just YouTube. (Pitch/tempo and the ad-block/dark-mode scripts still
+ * only activate on youtube.com pages, wherever the user ends up.)
+ */
+private fun resolveNavigationTarget(input: String): String {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty()) return "https://m.youtube.com"
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+    val looksLikeDomain = !trimmed.contains(" ") && trimmed.contains(".")
+    return if (looksLikeDomain) {
+        "https://$trimmed"
+    } else {
+        "https://www.google.com/search?q=" + URLEncoder.encode(trimmed, "UTF-8")
+    }
 }
 
 @Composable
