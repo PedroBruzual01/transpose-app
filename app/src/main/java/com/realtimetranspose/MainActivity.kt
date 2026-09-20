@@ -1,11 +1,14 @@
 package com.realtimetranspose
 
 import android.database.Cursor
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -54,6 +57,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // The app is dark-themed end to end (Nocturne), but the manifest's base
+        // theme is a plain Light one, so the system status/nav bars default to
+        // light-appearance scrims that read as a grey strip against our dark
+        // background. SystemBarStyle.dark(...) makes both bars transparent
+        // (our own Compose background shows through) with light system icons,
+        // matching the rest of the app instead of contrasting with it.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
 
         setContent {
             AppRoot(onPickFile = { filePickerLauncher.launch(arrayOf("audio/*")) })
