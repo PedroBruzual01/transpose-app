@@ -354,6 +354,11 @@ private const val BROWSER_PITCH_MAX = 12f
 private const val BROWSER_TEMPO_MIN = 0.5f
 private const val BROWSER_TEMPO_MAX = 2f
 
+private fun isYouTubeHost(url: String?): Boolean {
+    val host = url?.let { android.net.Uri.parse(it).host } ?: return false
+    return host == "youtube.com" || host.endsWith(".youtube.com")
+}
+
 /** Compose's LocalContext is usually a ContextWrapper around the Activity, not the Activity itself. */
 private tailrec fun android.content.Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -567,16 +572,16 @@ fun BrowserScreen() {
                         WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true)
                     }
 
-                    // "*" (all origins), not just m.youtube.com — the URL bar is a real
-                    // address bar now (any site, plus other YouTube subdomains like
-                    // music.youtube.com), so these must run everywhere to still work
-                    // after navigating away. Safe to run unconditionally: the ad-block
-                    // script only ever matches YouTube-specific JSON keys/DOM selectors
-                    // and no-ops elsewhere, the dark-mode cookie targets domain
-                    // .youtube.com specifically (browsers silently refuse to set a
-                    // cookie for any other domain), and the pitch hook just looks for
-                    // whatever <video> element is active on the current page.
-                    val origins = setOf("*")
+                    // YouTube-specific behavior is scoped to YouTube's own origins only —
+                    // AD_BLOCK_SCRIPT and DOM_FALLBACK_SCRIPT have real global side effects
+                    // (JSON.parse/Response.json monkey-patched with no URL filter, a
+                    // setInterval DOM-poll that never stops) that have no business running
+                    // on unrelated sites the URL bar can now take the user to, and the
+                    // dark-mode cookie is meaningless anywhere else. The pitch-shift hook
+                    // stays on "*": it's a genuine feature (pitch-shift whatever <video> is
+                    // on the current page) and is inert on pages with no <video> element.
+                    val youtubeOrigins = setOf("https://*.youtube.com", "https://youtube.com")
+                    val allOrigins = setOf("*")
                     val supportsDocumentStart =
                         WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
                     if (supportsDocumentStart) {
@@ -584,10 +589,10 @@ fun BrowserScreen() {
                         // bootstrap script reads it to decide which theme to render.
                         // Ad-block after that (also before YouTube's bootstrap, for the
                         // same reason), hook script last.
-                        WebViewCompat.addDocumentStartJavaScript(this, YOUTUBE_DARK_MODE_SCRIPT, origins)
-                        WebViewCompat.addDocumentStartJavaScript(this, AD_BLOCK_SCRIPT, origins)
-                        WebViewCompat.addDocumentStartJavaScript(this, DOM_FALLBACK_SCRIPT, origins)
-                        WebViewCompat.addDocumentStartJavaScript(this, hookScript, origins)
+                        WebViewCompat.addDocumentStartJavaScript(this, YOUTUBE_DARK_MODE_SCRIPT, youtubeOrigins)
+                        WebViewCompat.addDocumentStartJavaScript(this, AD_BLOCK_SCRIPT, youtubeOrigins)
+                        WebViewCompat.addDocumentStartJavaScript(this, DOM_FALLBACK_SCRIPT, youtubeOrigins)
+                        WebViewCompat.addDocumentStartJavaScript(this, hookScript, allOrigins)
                     }
 
                     addJavascriptInterface(TransposeJsBridge(), "TransposeBridge")
@@ -598,10 +603,14 @@ fun BrowserScreen() {
                             // (older WebView versions) — late, but better than nothing.
                             // The dark-mode cookie in particular only takes effect on the
                             // *next* navigation here, since this page already rendered.
+                            // evaluateJavascript has no origin scoping at all, so the
+                            // YouTube-only scripts are gated by hand here to match.
                             if (!supportsDocumentStart) {
-                                view.evaluateJavascript(YOUTUBE_DARK_MODE_SCRIPT, null)
-                                view.evaluateJavascript(AD_BLOCK_SCRIPT, null)
-                                view.evaluateJavascript(DOM_FALLBACK_SCRIPT, null)
+                                if (isYouTubeHost(url)) {
+                                    view.evaluateJavascript(YOUTUBE_DARK_MODE_SCRIPT, null)
+                                    view.evaluateJavascript(AD_BLOCK_SCRIPT, null)
+                                    view.evaluateJavascript(DOM_FALLBACK_SCRIPT, null)
+                                }
                                 view.evaluateJavascript(hookScript, null)
                             }
                         }

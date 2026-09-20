@@ -42,10 +42,23 @@ object BrowserProbeBus {
         )
     }
 
+    // TransposeJsBridge is reachable from any page loaded in the browser, not
+    // just YouTube (addJavascriptInterface has no per-origin scoping) — a
+    // hostile site could otherwise call onAdBlockEvent in a tight loop with
+    // unique tags and grow this map without bound (each insert also copies
+    // the whole map, so that's O(n^2) too). Cap both the tag length and the
+    // distinct-tag count; past the cap, further *new* tags are dropped
+    // (existing ones still increment normally) rather than crashing/hanging.
+    private const val MAX_AD_BLOCK_TAG_LENGTH = 100
+    private const val MAX_AD_BLOCK_DISTINCT_TAGS = 200
+
     fun reportAdBlockEvent(tag: String) {
         val current = _state.value
-        val counts = current.adBlockEvents.toMutableMap()
-        counts[tag] = (counts[tag] ?: 0) + 1
+        val safeTag = tag.take(MAX_AD_BLOCK_TAG_LENGTH)
+        val existing = current.adBlockEvents
+        if (safeTag !in existing && existing.size >= MAX_AD_BLOCK_DISTINCT_TAGS) return
+        val counts = existing.toMutableMap()
+        counts[safeTag] = (counts[safeTag] ?: 0) + 1
         _state.value = current.copy(adBlockEvents = counts)
     }
 
