@@ -92,7 +92,7 @@ object NocturneType {
         textAlign = TextAlign.Center,
     )
 
-    /** Empty-state title, "Sin archivo cargado". */
+    /** Empty-state title, "No file loaded". */
     val emptyTitle = TextStyle(fontFamily = heading, fontWeight = FontWeight.Medium, fontSize = 19.sp)
 
     /** Button label / Browser mono value size. */
@@ -127,7 +127,7 @@ object NocturneType {
         letterSpacing = 0.22.em,
     )
 
-    /** Diagnostic panel lines (Hook/Nivel/AdBlock). */
+    /** Diagnostic panel lines (Hook/Level/AdBlock). */
     val diagnosticMono = TextStyle(fontFamily = mono, fontWeight = FontWeight.Normal, fontSize = 10.5.sp)
 }
 

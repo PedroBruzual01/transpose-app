@@ -47,7 +47,7 @@ fun SectionLabel(
     }
 }
 
-/** Text-only accent button — "Reset", "Cambiar", etc. Dims and stops responding when disabled. */
+/** Text-only accent button — "Reset", "Change", etc. Dims and stops responding when disabled. */
 @Composable
 fun GhostTextButton(
     text: String,

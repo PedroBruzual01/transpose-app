@@ -137,13 +137,13 @@ object TransposePlayer {
             AudioFileDecoder(context, uri)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open decoder", e)
-            _state.value = _state.value.copy(error = "No se pudo abrir el archivo: ${e.message}")
+            _state.value = _state.value.copy(error = "Couldn't open the file: ${e.message}")
             return
         }
 
         if (decoder.channelCount !in 1..2) {
             _state.value = _state.value.copy(
-                error = "Solo se soportan archivos mono o estéreo (este tiene ${decoder.channelCount} canales)",
+                error = "Only mono or stereo files are supported (this one has ${decoder.channelCount} channels)",
             )
             decoder.close()
             return
